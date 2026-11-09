@@ -1,0 +1,6 @@
+corpus/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+results_llm*.md
+results_pooled.md
