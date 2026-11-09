@@ -103,34 +103,45 @@ def person_tokens(p: dict) -> set[str]:
 
 
 # --------------------------------------------------------------- text side
-def candidates(text: str) -> Iterator[str]:
+def split_candidates(text: str) -> tuple[list[str], str]:
+    """Candidates other than Japanese name windows, plus the text in which
+    the name windows live (NFKC, spaces between kana/kanji removed). The
+    detector computes those windows in bulk (fastscan.py)."""
     t = nfkc(text)
     low = t.lower()
-    for m in _EMAIL.finditer(low):
-        yield "e:" + m.group(0)
+    out = ["e:" + m.group(0) for m in _EMAIL.finditer(low)]
     for m in _PHONE.finditer(t):
         ph = norm_phone(m.group(0))
         if ph:
-            yield "p:" + ph
+            out.append("p:" + ph)
     for m in _PHONEISH.finditer(t):
         tail = phone_tail(m.group(0))
         if tail:
-            yield "t:" + tail
+            out.append("t:" + tail)
     t_addr = re.sub(r"(\d+)丁目", r"\1-", t)
     t_addr = re.sub(r"(\d+)番地?", r"\1-", t_addr)
     t_addr = re.sub(r"(\d+)号", r"\1", t_addr)
     t_addr = re.sub(r"-+", "-", t_addr)
-    for m in _ADDRESS.finditer(t_addr):
-        yield "a:" + norm_address(m.group(0))
+    out += ["a:" + norm_address(m.group(0)) for m in _ADDRESS.finditer(t_addr)]
     # romanized names: every adjacent pair of latin words, order-insensitive
     words = _LATIN_WORD.findall(low)
-    for a, b in zip(words, words[1:]):
-        yield romaji_key(a, b)
-    # Japanese names: windows over runs of kana/kanji, after removing spaces between them
-    joined = _SPACE_IN_CJK.sub("", t)
+    out += ["r:" + a + "|" + b if a <= b else "r:" + b + "|" + a for a, b in zip(words, words[1:])]  # = romaji_key
+    return out, _SPACE_IN_CJK.sub("", t)
+
+
+def name_windows(joined: str) -> Iterator[str]:
+    """Japanese names: every window of 3..10 characters inside a kana/kanji run."""
     for m in _CJK_RUN.finditer(joined):
         run = m.group(0)
         n = len(run)
         for i in range(n):
             for L in range(NAME_MIN, min(NAME_MAX, n - i) + 1):
                 yield "n:" + run[i:i + L]
+
+
+def candidates(text: str) -> Iterator[str]:
+    """Every candidate token, one at a time (the reference the detector's
+    bulk path is tested against)."""
+    others, joined = split_candidates(text)
+    yield from others
+    yield from name_windows(joined)

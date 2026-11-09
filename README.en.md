@@ -12,6 +12,7 @@ Shinafure is a prototype that tells a data owner the moment its stolen customer 
 - **Results.** In outputs reformatted by a local LLM (qwen2.5:7b), every canary that survived was detected: 26 out of 26. There were zero false positives, both on 39 outputs without canaries and on 13.48 million characters of ordinary text.
 - **Finding.** Canaries with rare names were deleted by the AI's preprocessing more often than the real customers around them (55% survived vs. 81%, p=0.007). Canaries with ordinary names showed no difference (75% vs. 78%). Canaries must blend into the name distribution of the data they protect.
 - **Abuse prevention.** A registrant who slips a real person's email, or name and address, into its registration never gets notified. Canaries are generated from random tickets issued by the registry, and the registry checks them before any notification goes out (v0.4).
+- **Speed.** Matching is about 14 times faster than in v0.4 (about 30 times for Japanese). One thread checks about 1.7 million Japanese characters per second, with detection results identical to v0.4 (v0.5).
 
 ## Background
 
@@ -44,8 +45,8 @@ Only F values go into the registry, and only blinded candidates go from the prov
 
 1. **Make canaries.** Mix customers who do not exist into the data you protect. Emails use a domain you control plus a random suffix; phone numbers are numbers you own. 80% of the names are ordinary and 20% are rare (see "Finding" for why).
 2. **Turn them into matching tokens.** Strong tokens are the email and the phone number. Weak tokens are the name (kanji, katakana, hiragana, and romanized in either order), the address, and the last 8 digits of the phone number. Full-width and half-width characters, +81 formats, and address variants such as "9丁目17番3号" and "9-17-3" are normalized to the same value.
-3. **Register.** With a secret key k, the registry turns token t into F(t) = SHA256(k·H(t)) (an OPRF on P-256). The registrant blinds t before asking for the computation, so the registry cannot tell what was registered. Only F values remain in the registry.
-4. **The provider checks inputs.** The provider runs candidates extracted from the input through a 24-bit prefix filter, locally. Only candidates that pass are blinded and looked up in the registry. Lookups are rate-limited per provider.
+3. **Register.** With a secret key k, the registry turns token t into F(t) = SHA256(x-coordinate of k·H(t)) (an OPRF on P-256). The registrant blinds t before asking for the computation, so the registry cannot tell what was registered. Only F values remain in the registry.
+4. **The provider checks inputs.** The provider runs candidates extracted from the input through a 32-bit prefix filter, locally. Only candidates that pass are blinded and sent to the registry to compute F, which the provider compares with its own copy of the list of registered F values. Only on a match does it ask the registry for that canary's registration details. The number of computations is rate-limited per provider.
 5. **Decide.** A canary is *confirmed*, and the registrant notified, when any of the following holds. Anything else is *suspect* and is not notified.
    - One strong token matches.
    - Two weak tokens of different kinds match, one of which is the address or the last 8 phone digits.
@@ -153,6 +154,31 @@ These are the results when a stalker-like registrant, having passed ownership ch
 
 The provider still matches, but the registry's check stops the notification. Deriving a key from the data itself through a server's OPRF is the same construction as DupLESS, an encryption scheme for deduplicated storage.
 
+## Matching speed
+
+In v0.5, matching is about 14 times faster than in v0.4 (about 30 times for Japanese). Detection results are exactly the same as in v0.4.
+
+With 1,000 canaries registered, v0.4 could check only about 50,000 Japanese characters per second. Most of the time went to two places: lookups for candidates that passed the prefix filter by chance, and hashing Japanese name candidates (about 4 per character) one at a time in Python.
+
+1. **Curve arithmetic in OpenSSL.** F is now derived from the point's x-coordinate alone, so elliptic-curve multiplication can be handed to OpenSSL's ECDH. Each one drops from about 1.6 ms to about 0.07 ms. The pure-Python implementation remains, and both give the same values.
+2. **Name candidates computed in bulk.** Name candidates now use a polynomial hash for their prefix, and all candidates in a text are computed at once with numpy.
+3. **Prefix widened from 24 to 32 bits.** Candidates that pass the filter by chance drop to 1/256. A leaked filter can be abused at 24 bits just the same.
+
+Measured with 1,000 canaries registered, in one thread (`python -m demo.bench corpus`). v0.4 figures are the faster of 2 runs; v0.5 figures are the fastest of 3.
+
+| Text | Characters | v0.4 (chars/s) | v0.5 (chars/s) | Speedup | Registry lookups v0.4→v0.5 | Detection |
+| --- | --- | --- | --- | --- | --- | --- |
+| JEITA corpus (Japanese literature and more) | 1.0M | 55k | 1.75M | 32x | 1,648→18 | Same |
+| KNBC corpus (Japanese blogs) | 0.13M | 61k | 1.64M | 27x | 236→16 | Same |
+| Project Gutenberg (English books) | 1.0M | 1.35M | 2.71M | 2x | 46→15 | Same |
+| Reuters (English news) | 1.0M | 1.48M | 2.74M | 2x | 44→16 | Same |
+| Customer list CSV (Faker, Japanese) | 0.35M | 116k | 961k | 8x | 380→325 | Same |
+| Total | 3.48M | 142k | 1.99M | 14x | | |
+
+The number of candidates, the confirmed set and the suspect set all matched v0.4. English gains less because English text has few name candidates to begin with. The customer CSV needs more lookups because real customers' names coincide with ordinary-name canaries and become suspects.
+
+This version also closes a privacy gap. In v0.4, even candidates that merely passed the prefix filter by chance had their F sent to the registry to check whether it was registered. The registry holds the key k, so by trying common names it could guess whose name an F belonged to. In v0.5, providers keep the list of registered F values and ask the registry only about matches. The list of F values alone cannot be compared with plaintext without the registry's OPRF.
+
 ## Limitations
 
 Shinafure works only when data reaches a participating AI with personal values intact.
@@ -161,7 +187,7 @@ Shinafure works only when data reaches a participating AI with personal values i
 - **If personal values disappear, it cannot detect.** For example, when the data is summarized, rows are deleted, or surnames and given names end up on separate rows.
 - **Canaries that are spotted get removed.** If canary emails all share one domain, an attacker who notices will delete those rows. You need several ordinary-looking domains and phone numbers you own. The same applies if the prefix filter leaks; it is meant to be given only to participating providers.
 - **Abuse prevention still has a gap.** A canary from a legitimate ticket can, by chance, have the same name and address as a real person. The prototype's tables are small (400 names when restricted to rare names, 43,200 addresses), so drawing 100 tickets a day for a year gives at most about a 0.2% chance of hitting one specific person. Number block verification is also a single SMS. And providers checking inputs at all needs to be squared with privacy law and, in Japan, the secrecy of communications.
-- **What was measured is narrow.** Only one real LLM (qwen2.5:7b) was tested. Matching is pure Python and slow for Japanese, about 200,000 characters per second.
+- **What was measured is narrow.** Only one real LLM (qwen2.5:7b) was tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; behavior with millions of canaries has not been measured.
 
 ## Prior art and differences
 
@@ -184,12 +210,13 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v0.4, 32 tests).
+- Code: this repository (Shinafure v0.5, 39 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
 - Finding experiment: run with `--tasks family --canary-style ordinary` (or `rare`) and `--seed 11` and `--seed 12`, then aggregate with `python -m demo.pool`.
 - Abuse prevention check: `python -m demo.abuse` (a few seconds)
+- Matching speed: `python -m demo.bench corpus` (about 1 minute)
 - Data: all synthetic. No real personal information was used.
 
 This article discloses the mechanisms described here as prior art (a defensive publication). The publication date is the day this article was published. It covers the following four points.
@@ -203,7 +230,7 @@ This article discloses the mechanisms described here as prior art (a defensive p
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 32 tests
+pytest -q                       # 39 tests
 ```
 
 | Path | Contents |
@@ -212,11 +239,14 @@ pytest -q                       # 32 tests
 | `shinafure/canary.py` | Canary generation for experiments |
 | `shinafure/issuance.py` | Canaries no one can aim (tickets, sealed openings) |
 | `shinafure/registry.py` | OPRF registry, ownership checks, pre-notification check, provider-side matching |
+| `shinafure/fastscan.py` | Prefix filter and bulk computation of Japanese name candidates (numpy) |
+| `shinafure/group.py` | OPRF curve arithmetic (OpenSSL and pure-Python implementations) |
 | `shinafure/proxy.py` | OpenAI-compatible proxy (checks inputs, then flags or blocks) |
 | `demo/measure.py` | Experiment 1 (synthetic data and text corpora) |
 | `demo/llm_eval.py` | Experiment 2 and the finding experiment (real LLM) |
 | `demo/pool.py` | Pools repeated runs and runs Fisher's exact test |
 | `demo/abuse.py` | Abuse attempts and the results table |
+| `demo/bench.py` | Matching speed measurement |
 | `docs/DESIGN.md` | Design details, decision rules, changes per version (Japanese) |
 | `results.md` | Experiment 1 results tables (Japanese) |
 

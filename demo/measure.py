@@ -26,6 +26,8 @@ from collections import defaultdict
 
 from faker import Faker
 
+from shinafure import group
+from shinafure.fastscan import HAVE_NUMPY
 from shinafure.canary import make_canaries
 from shinafure.registry import Detector, Registry, register_canaries
 
@@ -248,7 +250,7 @@ def main(corpus_dir: str) -> None:
         lines.append(f"| {name} | {len(text):,} | {d.candidates:,} | {d.oprf_calls} | {len(d.confirmed)} | {len(d.suspect)} | "
                      f"{len(text) / dt / 1e6:.2f} M文字/秒 |")
         print(f"  corpus {name}: chars={len(text)} cand={d.candidates} oprf={d.oprf_calls} conf={len(d.confirmed)} sus={len(d.suspect)} {dt:.1f}s", file=sys.stderr)
-    lines += ["", f"合計 {total_chars:,} 文字を {total_time:.0f} 秒で処理（純Python、1スレッド）。"]
+    lines += ["", f"合計 {total_chars:,} 文字を {total_time:.0f} 秒で処理（1スレッド、曲線計算 {group.backend.name}、numpy {'あり' if HAVE_NUMPY else 'なし'}）。"]
 
     # --------------------------------------------------------------- scaling
     lines += ["", "## 3. 規模を大きくしたとき（計算）", "",

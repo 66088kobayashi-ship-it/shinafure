@@ -10,13 +10,17 @@ Threats this design takes seriously
      (registering someone's real email, or name and address). See issuance.py.
 
 Mechanism (close to Google's Password Checkup, applied to canary people)
-  * F(t) = SHA256(k · H(t)) is an oblivious PRF keyed by the registry's secret
+  * F(t) = SHA256(x(k · H(t))) is an oblivious PRF keyed by the registry's secret
     k. Registrants learn F of their own tokens without revealing them
     (blinding), and register only F values. The registry stores F values.
-  * Providers keep a confidential 24-bit prefix filter P(t) of registered
-    tokens and check every candidate locally. Only candidates whose prefix
-    matches go to the registry, blinded, so the registry learns nothing about
-    the prompt. The OPRF endpoint is rate-limited per caller.
+  * Providers keep a confidential 32-bit prefix filter P(t) of registered
+    tokens and check every candidate locally (fastscan.py). Only candidates
+    whose prefix matches go to the registry, blinded, so the registry learns
+    nothing about the prompt. The OPRF endpoint is rate-limited per caller.
+  * Providers also hold the set of registered F values. After the OPRF they
+    check F locally and call lookup() only for real hits, so the registry
+    never sees F of a candidate that merely passed the prefix filter (it
+    could otherwise test guesses such as common names against those F).
   * A canary is *confirmed* when a strong token (email, phone) matches, or
     when a name and a partner (address, phone tail) of the same canary match,
     or when two different rare-name canaries appear in one input. Anything
@@ -38,31 +42,25 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
-from . import ec
+from . import ec, group
 from .canary import Canary
+from .fastscan import PrefixFilter, other_hits, prefix
 from .issuance import Opening, Ticket, canary_from_ticket, seal, unseal, valid_block
-from .tokens import NAME_KINDS, PARTNER_KINDS, STRONG, candidates, person_tokens
+from .tokens import NAME_KINDS, PARTNER_KINDS, STRONG, person_tokens, split_candidates
 
-DOMAIN = b"shinafure-v0"
+DOMAIN = b"shinafure-v1"
 MAX_TOKENS_PER_CANARY = 8      # e, p, t, n×3 (kanji, katakana, hiragana), r, a
 
 
-def H(token: str) -> ec.Point:
-    return ec.hash_to_curve(DOMAIN, token.encode())
+def finalize(kh_x: bytes) -> bytes:
+    """F(t) = SHA256(x(k·H(t)))."""
+    return hashlib.sha256(DOMAIN + b"|F|" + kh_x).digest()
 
 
-def prefix(token: str) -> int:
-    return int.from_bytes(hashlib.sha256(DOMAIN + b"|P|" + token.encode()).digest()[:3], "big")
-
-
-def finalize(kh: ec.Point) -> bytes:
-    return hashlib.sha256(DOMAIN + b"|F|" + ec.encode(kh)).digest()
-
-
-def escrow_key(kh: ec.Point) -> bytes:
+def escrow_key(kh_x: bytes) -> bytes:
     """Opens a sealed opening. Same OPRF point as F, different hash, so
     holding F (as the registry does) does not give the key."""
-    return hashlib.sha256(DOMAIN + b"|K|" + ec.encode(kh)).digest()
+    return hashlib.sha256(DOMAIN + b"|K|" + kh_x).digest()
 
 
 def _rand() -> int:
@@ -70,12 +68,12 @@ def _rand() -> int:
 
 
 def blind(token: str) -> tuple[int, bytes]:
-    r = _rand()
-    return r, ec.encode(ec.mul(r, H(token)))
+    return group.blind(DOMAIN, token)
 
 
-def unblind_point(r: int, evaluated: bytes) -> ec.Point:
-    return ec.mul(pow(r, -1, ec.N), ec.decode(evaluated))
+def unblind_point(r: int, evaluated: bytes) -> bytes:
+    """x(k·H(t)) from the registry's answer to a blinded request."""
+    return group.unblind_x(r, evaluated)
 
 
 def unblind(r: int, evaluated: bytes) -> bytes:
@@ -112,6 +110,7 @@ class Registry:
     def __init__(self, oprf_per_hour: int = 50_000, clock: Callable[[], float] = time.time,
                  require_tickets: bool = True, tickets_per_day: int = 100) -> None:
         self._k = _rand()
+        self._kkey = group.backend.key(self._k)
         self._entries: dict[bytes, list[Entry]] = defaultdict(list)  # F -> entries (names can be shared)
         self._prefixes: set[int] = set()
         self._providers: dict[str, str] = {}   # api key -> provider name
@@ -140,7 +139,7 @@ class Registry:
         if len(u) >= self.oprf_per_hour:
             raise RateLimited(caller)
         u.append(now)
-        return ec.encode(ec.mul(self._k, ec.decode(blinded)))
+        return group.backend.mul_key(self._kkey, blinded)   # ValueError if not a curve point
 
     # ------------------------------------------------------- ownership
     def domain_challenge(self, registrant: str, domain: str) -> tuple[str, str]:
@@ -237,6 +236,14 @@ class Registry:
             raise PermissionError("providers only")
         return frozenset(self._prefixes)
 
+    def f_values(self, api_key: str) -> frozenset[bytes]:
+        """Every registered F. Useless without the OPRF (rate-limited), so a
+        provider can hold it and look up only real hits: the registry then
+        never sees F of a provider's non-matching candidates."""
+        if api_key not in self._providers:
+            raise PermissionError("providers only")
+        return frozenset(self._entries)
+
     def lookup(self, api_key: str, f: bytes) -> list[Entry]:
         if api_key not in self._providers:
             raise PermissionError("providers only")
@@ -288,7 +295,8 @@ class Registry:
         if op.phone_block not in self._blocks[registrant]:
             return False, "phone block not verified for registrant"
         canary = canary_from_ticket(ticket, op)
-        expected = {finalize(ec.mul(self._k, H(tok))): token_kind(tok, canary.person)
+        be = group.backend
+        expected = {finalize(be.mul_key(self._kkey, be.hash_x(DOMAIN, tok.encode()))): token_kind(tok, canary.person)
                     for tok in person_tokens(canary.person)}
         for f in self._by_canary[cid]:
             kinds = {e[3] for e in self._entries[f] if e[1] == cid}
@@ -347,21 +355,24 @@ class Detector:
         self.refresh()
 
     def refresh(self) -> None:
-        self._filter = self.registry.prefix_filter(self.api_key)
+        self._filter = PrefixFilter(self.registry.prefix_filter(self.api_key))
+        self._fvals = self.registry.f_values(self.api_key)
 
-    def scan(self, text: str, report: bool = True) -> Detection:
+    def scan(self, text: str, report: bool = True, use_numpy: bool = True) -> Detection:
         det = Detection()
         hits: dict[str, dict] = {}
-        seen: set[str] = set()
-        for tok in candidates(text):
-            det.candidates += 1
-            if tok in seen or prefix(tok) not in self._filter:
-                continue
-            seen.add(tok)
+        others, joined = split_candidates(text)
+        n_windows, name_hits = self._filter.name_hits(joined, use_numpy)
+        det.candidates = len(others) + n_windows
+        toks = other_hits(others, self._filter.set)
+        toks.update("n:" + w for w in name_hits)
+        for tok in sorted(toks):
             r, b = blind(tok)
             det.oprf_calls += 1
             pt = unblind_point(r, self.registry.evaluate(b, self.name))
             f = finalize(pt)
+            if f not in self._fvals:
+                continue          # a prefix false positive: nothing goes to the registry
             for registrant, cid, ds, kind in self.registry.lookup(self.api_key, f):
                 h = hits.setdefault(cid, {"registrant": registrant, "dataset": ds, "kinds": set(), "keys": {}})
                 h["kinds"].add(kind)
