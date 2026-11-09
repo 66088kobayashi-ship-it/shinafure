@@ -15,7 +15,7 @@ def tickets(n, region="", seed=0, rare_ratio=0.2):
     rng = random.Random(seed)
     out = []
     for i in range(n):
-        op = new_opening("kanari.example", "0701234", rare_ratio, region)
+        op = Opening(rng.randbytes(32), "kanari.example", "0701234", round(rare_ratio * 1000), region)   # seeded: no flaky runs
         t = Ticket(f"t{seed}-{i}", "acme", "ds", op.commitment(), rng.randbytes(32), tables.version())
         out.append(canary_from_ticket(t, op))
     return out
@@ -48,9 +48,14 @@ def test_region_keeps_addresses_inside_it():
 
 
 def test_ordinary_surnames_follow_real_frequency():
-    counts = Counter(c.person["last"] for c in tickets(1500, seed=3, rare_ratio=0.0))
-    top = [k for k, _ in counts.most_common(2)]
-    assert top[0] == "佐藤" and "鈴木" in top + [counts.most_common(3)[2][0]]
+    n = 4000
+    counts = Counter(c.person["last"] for c in tickets(n, seed=3, rare_ratio=0.0))
+    sur, cum, _ = tables.names()
+    weight = {s[0]: b - a for s, a, b in zip(sur, (0,) + cum, cum)}
+    for name in ("佐藤", "鈴木", "高橋"):                      # the most common surnames
+        expected = n * weight[name] / cum[-1]
+        assert abs(counts[name] - expected) < 0.35 * expected, (name, counts[name], expected)
+    assert counts["佐藤"] > 2 * counts[sur[-1][0]]          # far more common than the least common one
 
 
 def test_tickets_from_another_table_version_are_refused():
