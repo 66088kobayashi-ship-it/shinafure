@@ -154,6 +154,16 @@ These are the results when a stalker-like registrant, having passed ownership ch
 
 The provider still matches, but the registry's check stops the notification. Deriving a key from the data itself through a server's OPRF is the same construction as DupLESS, an encryption scheme for deduplicated storage.
 
+v0.6 reduces chance coincidences further. Canary addresses are drawn from real towns with numbered 丁目 (about 91,000 town-chome units). Ordinary surnames are drawn according to how common they really are. To blend in with the protected data, addresses can be limited to one of the eight regions (地方), but not to a single prefecture: a prefecture with only 133 candidates, such as Shimane, would make it easier to aim at a particular person.
+
+| | Up to v0.5 | v0.6 |
+| --- | --- | --- |
+| Address candidates | 43,200 (8 towns × 丁目, 番, 号) | about 54 million (about 91,000 real town-chome units × 番, 号) |
+| Chance of hitting one specific person in a year (smallest region chosen) | at most about 0.2% | at most about 0.008% |
+| Same (whole country) | – | at most about 0.0002% |
+
+These figures assume drawing 100 tickets a day. With 1,000 canaries on real addresses registered, checking about 9.5 million characters of documents and customer lists produced zero confirmed matches.
+
 ## Matching speed
 
 In v0.5, matching is about 14 times faster than in v0.4 (about 30 times for Japanese). Detection results are exactly the same as in v0.4.
@@ -186,7 +196,7 @@ Shinafure works only when data reaches a participating AI with personal values i
 - **It does nothing against AI that does not participate.** It is powerless against attackers who run open models on their own machines or never put the data into an AI. On its own it is not decisive.
 - **If personal values disappear, it cannot detect.** For example, when the data is summarized, rows are deleted, or surnames and given names end up on separate rows.
 - **Canaries that are spotted get removed.** If canary emails all share one domain, an attacker who notices will delete those rows. You need several ordinary-looking domains and phone numbers you own. The same applies if the prefix filter leaks; it is meant to be given only to participating providers.
-- **Abuse prevention still has a gap.** A canary from a legitimate ticket can, by chance, have the same name and address as a real person. The prototype's tables are small (400 names when restricted to rare names, 43,200 addresses), so drawing 100 tickets a day for a year gives at most about a 0.2% chance of hitting one specific person. Number block verification is also a single SMS. And providers checking inputs at all needs to be squared with privacy law and, in Japan, the secrecy of communications.
+- **Abuse prevention still has a gap.** A canary from a legitimate ticket can, by chance, have the same name and address as a real person. Since v0.6 draws addresses from real town-chome units, drawing 100 tickets a day for a year gives at most about a 0.008% chance of hitting one specific person (about 0.0002% if addresses come from the whole country). The remaining bottleneck is the table of rare names (400 combinations). Number block verification is also a single SMS. And providers checking inputs at all needs to be squared with privacy law and, in Japan, the secrecy of communications.
 - **What was measured is narrow.** Only one real LLM (qwen2.5:7b) was tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; behavior with millions of canaries has not been measured.
 
 ## Prior art and differences
@@ -210,13 +220,15 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v0.5, 39 tests).
+- Code: this repository (Shinafure v0.6, 46 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
 - Finding experiment: run with `--tasks family --canary-style ordinary` (or `rare`) and `--seed 11` and `--seed 12`, then aggregate with `python -m demo.pool`.
 - Abuse prevention check: `python -m demo.abuse` (a few seconds)
 - Matching speed: `python -m demo.bench corpus` (about 1 minute)
+- False positives with canaries on real addresses: `python -m demo.bench corpus --ticketed --no-plant --mb 3`
+- Address data: derived from [Geolonia 住所データ](https://github.com/geolonia/japanese-addresses) (CC BY 4.0; built from MLIT location reference information and Japan Post postal code data) and bundled. Surname frequencies come from [Faker](https://github.com/joke2k/faker) (MIT).
 - Data: all synthetic. No real personal information was used.
 
 This article discloses the mechanisms described here as prior art (a defensive publication). The publication date is the day this article was published. It covers the following four points.
@@ -230,7 +242,7 @@ This article discloses the mechanisms described here as prior art (a defensive p
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 39 tests
+pytest -q                       # 46 tests
 ```
 
 | Path | Contents |
@@ -241,6 +253,9 @@ pytest -q                       # 39 tests
 | `shinafure/registry.py` | OPRF registry, ownership checks, pre-notification check, provider-side matching |
 | `shinafure/fastscan.py` | Prefix filter and bulk computation of Japanese name candidates (numpy) |
 | `shinafure/group.py` | OPRF curve arithmetic (OpenSSL and pure-Python implementations) |
+| `shinafure/tables.py` | Address and name tables for ticketed canaries, and the coincidence bound |
+| `shinafure/data/` | Address table (Geolonia, CC BY 4.0) and name table (Faker, MIT); sources in `NOTICE.md` |
+| `scripts/build_tables.py` | Builds the address and name tables |
 | `shinafure/proxy.py` | OpenAI-compatible proxy (checks inputs, then flags or blocks) |
 | `demo/measure.py` | Experiment 1 (synthetic data and text corpora) |
 | `demo/llm_eval.py` | Experiment 2 and the finding experiment (real LLM) |

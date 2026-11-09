@@ -39,9 +39,11 @@ import hmac
 import json
 import re
 import secrets
+from bisect import bisect_right
 from dataclasses import dataclass
 
-from .canary import BUILDINGS, GIVEN, ORD_GIVEN, ORD_SURNAMES, PLACES, SURNAMES, Canary
+from . import tables
+from .canary import BUILDINGS, GIVEN, SURNAMES, Canary
 
 ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 SUFFIX_LEN = 8                 # 36^8 ≈ 2.8e12: a canary email is not guessable
@@ -60,16 +62,18 @@ class Opening:
     domain: str
     phone_block: str
     rare_permille: int = 200   # share of rare-name canaries, in 1/1000
+    region: str = ""           # one of tables.REGIONS, or "" for the whole country
 
     def commitment(self) -> bytes:
-        h = hashlib.sha256(b"shinafure-commit-v1")
-        for part in (self.secret, self.domain.encode(), self.phone_block.encode(), str(self.rare_permille).encode()):
+        h = hashlib.sha256(b"shinafure-commit-v2")
+        for part in (self.secret, self.domain.encode(), self.phone_block.encode(), str(self.rare_permille).encode(),
+                     self.region.encode()):
             h.update(len(part).to_bytes(2, "big") + part)
         return h.digest()
 
     def to_bytes(self, ticket_id: str) -> bytes:
         return json.dumps({"t": ticket_id, "s": self.secret.hex(), "d": self.domain,
-                           "b": self.phone_block, "q": self.rare_permille}, sort_keys=True).encode()
+                           "b": self.phone_block, "q": self.rare_permille, "g": self.region}, sort_keys=True).encode()
 
     @staticmethod
     def parse(blob: bytes, ticket_id: str) -> "Opening | None":
@@ -77,17 +81,27 @@ class Opening:
             o = json.loads(blob)
             if o["t"] != ticket_id:
                 return None
-            op = Opening(bytes.fromhex(o["s"]), str(o["d"]), str(o["b"]), int(o["q"]))
+            op = Opening(bytes.fromhex(o["s"]), str(o["d"]), str(o["b"]), int(o["q"]), str(o["g"]))
         except (ValueError, KeyError, TypeError):
             return None
-        ok = len(op.secret) == 32 and valid_block(op.phone_block) and 0 <= op.rare_permille <= 1000
+        ok = (len(op.secret) == 32 and valid_block(op.phone_block) and 0 <= op.rare_permille <= 1000
+              and (op.region == tables.NATIONWIDE or op.region in tables.REGIONS))
         return op if ok else None
 
 
-def new_opening(domain: str, phone_block: str, rare_ratio: float = 0.2) -> Opening:
+def new_opening(domain: str, phone_block: str, rare_ratio: float = 0.2, region: str = tables.NATIONWIDE) -> Opening:
+    """region: where the canaries' addresses come from, to blend in with the
+    protected data (e.g. "関東" for a Tokyo shop). Eight regions only, never
+    a single prefecture (see tables.coincidence_bound).
+
+    phone_block should hold far more numbers than you will have canaries
+    (100 times or more): canaries draw their numbers independently, and two
+    canaries with the same number are both confirmed when it appears."""
     if not valid_block(phone_block):
         raise ValueError("phone_block must be 3-11 digits starting with 0")
-    return Opening(secrets.token_bytes(32), domain.strip().lower(), phone_block, round(rare_ratio * 1000))
+    if region != tables.NATIONWIDE and region not in tables.REGIONS:
+        raise ValueError(f"region must be one of {list(tables.REGIONS)} or '' for the whole country")
+    return Opening(secrets.token_bytes(32), domain.strip().lower(), phone_block, round(rare_ratio * 1000), region)
 
 
 @dataclass(frozen=True)
@@ -97,6 +111,7 @@ class Ticket:
     dataset: str
     commitment: bytes
     nonce: bytes               # drawn by the registry after the commitment
+    table: str = ""            # tables.version() at issue time
 
 
 class Drbg:
@@ -126,14 +141,25 @@ class Drbg:
     def randint(self, a: int, b: int) -> int:
         return a + self.below(b - a + 1)
 
+    def weighted(self, seq, cum):
+        """seq[i] with probability (cum[i] - cum[i-1]) / cum[-1]."""
+        return seq[bisect_right(cum, self.below(cum[-1]))]
+
 
 def canary_from_ticket(ticket: Ticket, op: Opening) -> Canary:
-    """Deterministic: the registrant chooses nothing but the committed Opening."""
-    g = Drbg(hashlib.sha256(b"shinafure-canary-v1|" + ticket.nonce + op.secret).digest())
+    """Deterministic: the registrant chooses nothing but the committed Opening.
+    Ordinary surnames follow their real frequency; addresses are real towns
+    with numbered 丁目, drawn uniformly from the committed region."""
+    if ticket.table != tables.version():
+        raise ValueError(f"ticket was issued with table {ticket.table!r}, this is {tables.version()!r}")
+    g = Drbg(hashlib.sha256(b"shinafure-canary-v2|" + ticket.table.encode() + b"|" + ticket.nonce + op.secret).digest())
     rare = g.below(1000) < op.rare_permille
-    S, G = (SURNAMES, GIVEN) if rare else (ORD_SURNAMES, ORD_GIVEN)
-    s, gv = g.choice(S), g.choice(G)
-    pref, town = g.choice(PLACES)
+    if rare:
+        s, gv = g.choice(SURNAMES), g.choice(GIVEN)
+    else:
+        sur, cum, given = tables.names()
+        s, gv = g.weighted(sur, cum), g.choice(given)
+    pref, city, town, chome = g.choice(tables.units(op.region))
     suffix = "".join(g.choice(ALPHABET) for _ in range(SUFFIX_LEN))
     digits = op.phone_block + "".join(str(g.below(10)) for _ in range(PHONE_DIGITS - len(op.phone_block)))
     person = {
@@ -141,7 +167,7 @@ def canary_from_ticket(ticket: Ticket, op: Opening) -> Canary:
         "last_roma": s[2], "first_roma": gv[2],
         "email": f"{gv[2].lower()}.{s[2].lower()}.{suffix}@{op.domain}",
         "phone": f"{digits[:3]}-{digits[3:7]}-{digits[7:]}",
-        "address": f"{pref}{town}{g.randint(1, 9)}丁目{g.randint(1, 30)}番{g.randint(1, 20)}号 "
+        "address": f"{pref}{city}{town}{chome}丁目{g.randint(1, tables.BAN_MAX)}番{g.randint(1, tables.GO_MAX)}号 "
                    f"{s[0]}{g.choice(BUILDINGS)}{g.randint(1, 9)}0{g.randint(1, 9)}",
         "style": "rare" if rare else "ordinary",
     }

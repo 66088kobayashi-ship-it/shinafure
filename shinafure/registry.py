@@ -42,7 +42,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
-from . import ec, group
+from . import ec, group, tables
 from .canary import Canary
 from .fastscan import PrefixFilter, other_hits, prefix
 from .issuance import Opening, Ticket, canary_from_ticket, seal, unseal, valid_block
@@ -191,7 +191,8 @@ class Registry:
         if len(log) >= self.tickets_per_day:
             raise RateLimited(registrant)
         log.append(now)
-        t = Ticket(f"{dataset}-{secrets.token_hex(6)}", registrant, dataset, commitment, secrets.token_bytes(32))
+        t = Ticket(f"{dataset}-{secrets.token_hex(6)}", registrant, dataset, commitment, secrets.token_bytes(32),
+                   tables.version())
         self._tickets[t.ticket_id] = t
         return t
 
@@ -294,7 +295,10 @@ class Registry:
             return False, "email domain not verified for registrant"
         if op.phone_block not in self._blocks[registrant]:
             return False, "phone block not verified for registrant"
-        canary = canary_from_ticket(ticket, op)
+        try:
+            canary = canary_from_ticket(ticket, op)
+        except ValueError:
+            return False, "canary tables of this ticket are not available"
         be = group.backend
         expected = {finalize(be.mul_key(self._kkey, be.hash_x(DOMAIN, tok.encode()))): token_kind(tok, canary.person)
                     for tok in person_tokens(canary.person)}
