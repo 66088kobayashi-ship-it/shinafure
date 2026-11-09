@@ -183,6 +183,7 @@ flowchart LR
 試作は Python で書き、すべての実験を手元の PC で再現できます。有料の API は使っていません。
 
 - コード：このリポジトリ（品触れ v0.4、テスト32本）。
+- 保存記録：[Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) に2026年11月9日に保存（`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`）。
 - 合成データとコーパスの実験：`python -m demo.measure corpus`（約1分）
 - 本物の LLM の実験：[Ollama](https://ollama.com) で qwen2.5:7b を動かし、`python -m demo.llm_eval --backend ollama --chunks 4 --rows 20` を実行します。GPU の無いノート PC で約2時間かかりました。
 - 発見の実験：`--tasks family --canary-style ordinary`（または `rare`）に `--seed 11` と `--seed 12` を付けて実行し、`python -m demo.pool` で集計します。
