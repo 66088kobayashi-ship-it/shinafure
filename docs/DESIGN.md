@@ -302,3 +302,9 @@ v0.4 で登録した F は v0.5 では使えません（F の定義と DOMAIN �
 | 普通の名前 | 13/18（72%） | 502/696（72%） | p=1.0 |
 
 普通と珍しいの直接比較は p=0.149。出力に残ったカナリアは19人全員を検出、カナリアなし37回で誤検知0件。1回あたり約13〜21分（CPU 72%／GPU 28%）。
+
+## v0.7 の変更：LiteLLM のガードレール（`shinafure/integrations/litellm_guard.py`）
+
+LiteLLM の `CustomGuardrail.async_pre_call_hook` に照合を入れました。リクエストの `messages`・`prompt`・`input`・`system` から利用者が書いた文字列をすべて集め、`Detector.scan` を別スレッドで実行します（イベントループを止めない）。結果は `data["metadata"]["shinafure"]` に記録し、方針が block なら確定一致で HTTP 403 を返します。台帳の検出器は `configure()` で渡すか、試用なら `SHINAFURE_DEMO=1` で実験用カナリア5人の台帳を同じプロセスに立てます。本番では台帳は別のサービスで、OPRF・接頭辞フィルタ・F の一覧をネットワーク越しに提供する必要があります（未実装）。
+
+確認：LiteLLM 1.109.1 のプロキシ（モデルは mock_response）で、普通の名簿は200、カナリア入りは403、登録者への通知を確認。プロキシは master key なしでは起動しないので、試すときも `LITELLM_MASTER_KEY` を設定します。

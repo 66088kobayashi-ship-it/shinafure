@@ -198,6 +198,21 @@ The number of candidates, the confirmed set and the suspect set all matched v0.4
 
 This version also closes a privacy gap. In v0.4, even candidates that merely passed the prefix filter by chance had their F sent to the registry to check whether it was registered. The registry holds the key k, so by trying common names it could guess whose name an F belonged to. In v0.5, providers keep the list of registered F values and ask the registry only about matches. The list of F values alone cannot be compared with plaintext without the registry's OPRF.
 
+## Plugging into an AI gateway
+
+Shinafure can be added as a "guardrail" to LiteLLM (MIT), an AI gateway (v0.7). A few lines in its config file make every request get checked before it reaches the model.
+
+```yaml
+guardrails:
+  - guardrail_name: shinafure
+    litellm_params:
+      guardrail: shinafure.integrations.litellm_guard.ShinafureGuardrail
+      mode: pre_call
+      default_on: true
+```
+
+There are two policies: flag and pass, or block. Tested on a real LiteLLM proxy (version 1.109), an ordinary customer list reached the model unchanged, a list containing a canary was refused with HTTP 403, and the registrant was notified. The prompt never leaves the gateway; only blinded candidates go to the registry.
+
 ## Limitations
 
 Shinafure works only when data reaches a participating AI with personal values intact.
@@ -229,7 +244,7 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v0.6, 46 tests).
+- Code: this repository (Shinafure v0.7, 50 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
@@ -251,7 +266,7 @@ This article discloses the mechanisms described here as prior art (a defensive p
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 46 tests
+pytest -q                       # 50 tests
 ```
 
 | Path | Contents |
@@ -265,6 +280,7 @@ pytest -q                       # 46 tests
 | `shinafure/tables.py` | Address and name tables for ticketed canaries, and the coincidence bound |
 | `shinafure/data/` | Address table (Geolonia, CC BY 4.0) and name table (Faker, MIT); sources in `NOTICE.md` |
 | `scripts/build_tables.py` | Builds the address and name tables |
+| `shinafure/integrations/litellm_guard.py` | LiteLLM guardrail (checks requests, then flags or blocks) |
 | `shinafure/proxy.py` | OpenAI-compatible proxy (checks inputs, then flags or blocks) |
 | `demo/measure.py` | Experiment 1 (synthetic data and text corpora) |
 | `demo/llm_eval.py` | Experiment 2 and the finding experiment (real LLM) |

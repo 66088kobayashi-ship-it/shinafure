@@ -1,12 +1,13 @@
 [project]
 name = "shinafure"
-version = "0.6.0"
+version = "0.7.0"
 description = "Canary-person registry checked by AI providers on inference inputs, with an OPRF ledger that never holds plaintext."
 requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
 proxy = ["fastapi>=0.110"]
+litellm = ["litellm>=1.70"]
 fast = ["numpy>=1.24", "cryptography>=41"]
 demo = ["faker>=20", "fastapi>=0.110", "httpx>=0.27"]
 test = ["pytest>=8", "faker>=20", "fastapi>=0.110", "httpx>=0.27", "numpy>=1.24", "cryptography>=41"]
@@ -16,7 +17,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["shinafure", "shinafure.data"]
+packages = ["shinafure", "shinafure.data", "shinafure.integrations"]
 
 [tool.setuptools.package-data]
 "shinafure.data" = ["*.gz", "*.tsv", "*.md"]

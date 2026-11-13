@@ -198,6 +198,21 @@ v0.4 は、カナリアを1,000人登録すると、日本語を毎秒約5万文
 
 あわせて、プライバシーの穴を1つ塞ぎました。v0.4 では、接頭辞フィルタを偶然通っただけの候補も、F を台帳に送って登録の有無を確かめていました。台帳は鍵 k を持っているので、ありふれた名前を当てはめれば、その F が誰の名前かを推測できました。v0.5 では、提供者が登録済みの F の一覧を手元に持ち、一致したものだけを台帳に問い合わせます。F の一覧だけでは、台帳の OPRF なしに平文と照らし合わせられません。
 
+## AI の中継サーバーに入れる
+
+品触れは、AI の中継サーバー LiteLLM（MIT）の「ガードレール」として差し込めます（v0.7）。設定ファイルに数行足すだけで、すべてのリクエストを AI に渡す前に照合します。
+
+```yaml
+guardrails:
+  - guardrail_name: shinafure
+    litellm_params:
+      guardrail: shinafure.integrations.litellm_guard.ShinafureGuardrail
+      mode: pre_call
+      default_on: true
+```
+
+「印を付けて通す」と「止める」の2つの方針を選べます。本物の LiteLLM プロキシ（版 1.109）で試すと、普通の名簿はそのまま AI に届き、カナリア入りの名簿は HTTP 403 で止まり、登録者に通知が届きました。プロンプトは中継サーバーから出ません。台帳に行くのは目隠しした候補だけです。
+
 ## 限界
 
 品触れが効くのは、参加している AI に、個人の値が残った形でデータが入ったときだけです。
@@ -229,7 +244,7 @@ v0.4 は、カナリアを1,000人登録すると、日本語を毎秒約5万文
 
 試作は Python で書き、すべての実験を手元の PC で再現できます。有料の API は使っていません。
 
-- コード：このリポジトリ（品触れ v0.6、テスト46本）。
+- コード：このリポジトリ（品触れ v0.7、テスト50本）。
 - 保存記録：[Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) に2026年11月9日に保存（`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`）。
 - 合成データとコーパスの実験：`python -m demo.measure corpus`（約1分）
 - 本物の LLM の実験：[Ollama](https://ollama.com) で qwen2.5:7b を動かし、`python -m demo.llm_eval --backend ollama --chunks 4 --rows 20` を実行します。GPU の無いノート PC で約2時間かかりました。
@@ -251,7 +266,7 @@ v0.4 は、カナリアを1,000人登録すると、日本語を毎秒約5万文
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 46本
+pytest -q                       # 50本
 ```
 
 | 場所 | 中身 |
@@ -265,6 +280,7 @@ pytest -q                       # 46本
 | `shinafure/tables.py` | チケットのカナリア用の住所表・名前表と、偶然一致の上限 |
 | `shinafure/data/` | 住所表（Geolonia、CC BY 4.0）と名前表（Faker、MIT）。出典は `NOTICE.md` |
 | `scripts/build_tables.py` | 住所表と名前表の作成 |
+| `shinafure/integrations/litellm_guard.py` | LiteLLM のガードレール（照合して印を付ける／止める） |
 | `shinafure/proxy.py` | OpenAI 互換のプロキシ（照合して印を付ける／止める） |
 | `demo/measure.py` | 実験1（合成データと文書コーパス） |
 | `demo/llm_eval.py` | 実験2と発見の実験（本物の LLM） |
