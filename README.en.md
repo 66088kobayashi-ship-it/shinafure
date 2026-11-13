@@ -213,7 +213,7 @@ guardrails:
 
 There are two policies: flag and pass, or block. Tested on a real LiteLLM proxy (version 1.109), an ordinary customer list reached the model unchanged, a list containing a canary was refused with HTTP 403, and the registrant was notified. The prompt never leaves the gateway; only blinded candidates go to the registry.
 
-The registry can run as a separate HTTP service (v0.8, `shinafure/service.py`). Tokens separate three roles (admin, registrant, provider), and neither canary values nor prompts cross the wire. Running the registry service and LiteLLM as separate processes, an ordinary list got 200, a list with a canary got 403, and the registry service notified the registrant. The gateway refetches the registry's lists every 5 minutes, so canaries registered later are caught too. The registry can be kept in a single SQLite file (v0.9, `SHINAFURE_DB`), so registrations, tickets, tokens and records survive a restart. Tokens are stored as hashes, and the OPRF key stays out of the file when passed in an environment variable.
+The registry can run as a separate HTTP service (v0.8, `shinafure/service.py`). Tokens separate three roles (admin, registrant, provider), and neither canary values nor prompts cross the wire. Running the registry service and LiteLLM as separate processes, an ordinary list got 200, a list with a canary got 403, and the registry service notified the registrant. The gateway refetches the registry's lists every 5 minutes, so canaries registered later are caught too. The registry can be kept in a single SQLite file (v0.9, `SHINAFURE_DB`), so registrations, tickets, tokens and records survive a restart. Tokens are stored as hashes, and the OPRF key stays out of the file when passed in an environment variable. The admin can revoke a leaked token, and its holder can replace it (v1.0). Notifications to registrants carry an HMAC-SHA256 signature, and undelivered ones are retried with growing intervals, up to 12 times.
 
 ```bash
 SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHINAFURE_POLICY=block litellm --config config.yaml
@@ -250,7 +250,7 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v0.9, 58 tests).
+- Code: this repository (Shinafure v1.0, 61 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
@@ -272,7 +272,7 @@ This article discloses the mechanisms described here as prior art (a defensive p
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 58 tests
+pytest -q                       # 61 tests
 ```
 
 | Path | Contents |

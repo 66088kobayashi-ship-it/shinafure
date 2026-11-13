@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS reports(registrant TEXT, canary_id TEXT, dataset TEXT
                                    kinds TEXT, status TEXT, at REAL, delivered INTEGER);
 CREATE TABLE IF NOT EXISTS abuse(registrant TEXT, canary_id TEXT, why TEXT, at REAL);
 CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, role TEXT, name TEXT, ref TEXT, webhook TEXT);
+CREATE TABLE IF NOT EXISTS webhook_secrets(registrant TEXT PRIMARY KEY, secret TEXT);
+CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, registrant TEXT, payload TEXT, attempts INTEGER, next_at REAL);
 """
 
 
