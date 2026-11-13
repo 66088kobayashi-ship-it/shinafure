@@ -10,7 +10,7 @@ Shinafure is a prototype that tells a data owner the moment its stolen customer 
 
 - **How it works.** A company mixes fake customers (canaries) into its own data and registers them in a shared registry. AI providers check inference inputs against the registry. The registry never holds plaintext, and prompt contents never reach the registry.
 - **Results.** In outputs reformatted by a local LLM (qwen2.5:7b), every canary that survived was detected: 26 out of 26. There were zero false positives, both on 39 outputs without canaries and on 13.48 million characters of ordinary text.
-- **Finding.** Canaries with rare names were deleted by the AI's preprocessing more often than the real customers around them (55% survived vs. 81%, p=0.007). Canaries with ordinary names showed no difference (75% vs. 78%). Canaries must blend into the name distribution of the data they protect.
+- **Finding.** Canaries with rare names were deleted by the AI's preprocessing more often than the real customers around them (55% survived vs. 81%, p=0.007). Canaries with ordinary names showed no difference (75% vs. 78%). A model from another company (IBM's granite3.3:8b) showed the same pattern (43% vs. 69%, p=0.044). Canaries must blend into the name distribution of the data they protect.
 - **Abuse prevention.** A registrant who slips a real person's email, or name and address, into its registration never gets notified. Canaries are generated from random tickets issued by the registry, and the registry checks them before any notification goes out (v0.4).
 - **Speed.** Matching is about 14 times faster than in v0.4 (about 30 times for Japanese). One thread checks about 1.7 million Japanese characters per second, with detection results identical to v0.4 (v0.5).
 
@@ -114,7 +114,7 @@ Summaries remove personal values, so missing them is expected. All three misses 
 
 ## Finding: canaries that stand out get deleted by AI
 
-Rare-name canaries were deleted much more often than the real customers in the same outputs (55% survived vs. 81%, p=0.007). Ordinary-name canaries were deleted at the same rate as real customers.
+Rare-name canaries were deleted much more often than the real customers in the same outputs (55% survived vs. 81%, p=0.007). Ordinary-name canaries were deleted at the same rate as real customers. The same pattern reappeared with a model from another company.
 
 The canaries deleted during family grouping in Experiment 2 all had rare names, such as 伊集院 (Ijuin) and 鷲見 (Sumi). So I ran only the "group by family" instruction with 20 ordinary-name canaries and 20 rare-name canaries (November 4–5, 2026, two random seeds). As a baseline, I also counted how many real customer rows survived in the same outputs.
 
@@ -123,12 +123,21 @@ The canaries deleted during family grouping in Experiment 2 all had rare names, 
 | Rare names | 11/20 (55%) | 635/780 (81%) | p=0.007 |
 | Ordinary names | 15/20 (75%) | 593/760 (78%) | p=0.78 |
 
-- **The matcher never missed.** All 26 canaries that survived in outputs were detected, with zero false positives on 39 outputs without canaries. Every miss came from the AI deleting the row.
+To check that this is not a quirk of qwen, I ran the same experiment with IBM's granite3.3:8b (Apache 2.0) (November 11–13, 2026, 40 rows per call, the same seeds).
+
+| Canary type | Canaries surviving | Real customers surviving in the same outputs | Difference (Fisher's exact test, two-sided) |
+| --- | --- | --- | --- |
+| Rare names | 6/14 (43%) | 374/540 (69%) | p=0.044 |
+| Ordinary names | 13/18 (72%) | 502/696 (72%) | p=1.0 |
+
+11 of the 80 calls timed out and are missing (more of them with rare names). For granite, real customers whose full name appears twice in a block are left out of the count. All 19 canaries that survived in outputs were detected, with zero false positives on 37 outputs without canaries.
+
+- **The matcher never missed.** In the qwen experiment, all 26 canaries that survived in outputs were detected, with zero false positives on 39 outputs without canaries. Every miss came from the AI deleting the row.
 - **Canaries must blend into the name distribution of the protected data.** Canaries that stand out get singled out and dropped by AI preprocessing.
 - **Across a whole dataset, detection is close to certain.** Ordinary-name canaries disappear about 25% of the time. If rows disappear independently, the chance that all 10 of 10 canaries disappear is about one in a million.
 - **So the prototype uses 80% ordinary names and 20% rare names.** Rare names are kept to catch extracts that contain only names. Ordinary names collide with real people, so they confirm only together with an address or phone number.
 
-Two caveats. Rows in the same block are not independent, so the p-values are somewhat optimistic. And only one model and one kind of instruction were measured. Comparing ordinary and rare names directly, the difference was within chance (p=0.32).
+Two caveats. Rows in the same block are not independent, so the p-values are somewhat optimistic. And only two models and one kind of instruction were measured. Comparing ordinary and rare names directly, the difference was within chance for both models (qwen p=0.32, granite p=0.15).
 
 ## Preventing abuse: canaries no one can aim
 
@@ -197,7 +206,7 @@ Shinafure works only when data reaches a participating AI with personal values i
 - **If personal values disappear, it cannot detect.** For example, when the data is summarized, rows are deleted, or surnames and given names end up on separate rows.
 - **Canaries that are spotted get removed.** If canary emails all share one domain, an attacker who notices will delete those rows. You need several ordinary-looking domains and phone numbers you own. The same applies if the prefix filter leaks; it is meant to be given only to participating providers.
 - **Abuse prevention still has a gap.** A canary from a legitimate ticket can, by chance, have the same name and address as a real person. Since v0.6 draws addresses from real town-chome units, drawing 100 tickets a day for a year gives at most about a 0.008% chance of hitting one specific person (about 0.0002% if addresses come from the whole country). The remaining bottleneck is the table of rare names (400 combinations). Number block verification is also a single SMS. And providers checking inputs at all needs to be squared with privacy law and, in Japan, the secrecy of communications.
-- **What was measured is narrow.** Only one real LLM (qwen2.5:7b) was tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; behavior with millions of canaries has not been measured.
+- **What was measured is narrow.** Only two real LLMs (qwen2.5:7b and granite3.3:8b) were tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; behavior with millions of canaries has not been measured.
 
 ## Prior art and differences
 
@@ -224,7 +233,7 @@ The prototype is written in Python, and every experiment can be reproduced on an
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
-- Finding experiment: run with `--tasks family --canary-style ordinary` (or `rare`) and `--seed 11` and `--seed 12`, then aggregate with `python -m demo.pool`.
+- Finding experiment: run with `--tasks family --canary-style ordinary` (or `rare`) with `--seed 11`, `--seed 12` and `--rows 40`, then aggregate with `python -m demo.pool --rows 40 "*.jsonl"`. For granite, add `--model granite3.3:8b`; it took about 18 hours on a laptop with a weak GPU.
 - Abuse prevention check: `python -m demo.abuse` (a few seconds)
 - Matching speed: `python -m demo.bench corpus` (about 1 minute)
 - False positives with canaries on real addresses: `python -m demo.bench corpus --ticketed --no-plant --mb 3`
