@@ -9,10 +9,11 @@ LiteLLM proxy (config.yaml):
           mode: pre_call
           default_on: true
 
-The guardrail needs a Detector (a provider's view of a registry). Give it
-one in code with `configure(detector, policy)`, or set SHINAFURE_DEMO=1 to
-start with an in-process demo registry holding a few canaries (for trying
-the proxy; not for production, where the registry is a separate service).
+The guardrail needs a Detector (a provider's view of a registry):
+  * SHINAFURE_REGISTRY_URL + SHINAFURE_PROVIDER_TOKEN : the registry service
+    (shinafure.service), the normal setup
+  * configure(detector, policy) in code
+  * SHINAFURE_DEMO=1 : an in-process registry with 5 experiment canaries, to try it
 
 policy "flag"  : let the request through, record the result in
                  data["metadata"]["shinafure"] and report confirmed canaries
@@ -25,19 +26,21 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from ..registry import Detector
 
-_state: dict[str, Any] = {"detector": None, "policy": "flag"}
+_state: dict[str, Any] = {"detector": None, "policy": "flag", "refreshed": 0.0,
+                         "refresh_every": float(os.environ.get("SHINAFURE_REFRESH_SECONDS", "300"))}
 
 
 def configure(detector: Detector, policy: str = "flag") -> None:
     if policy not in ("flag", "block"):
         raise ValueError("policy must be flag or block")
-    _state.update(detector=detector, policy=policy)
+    _state.update(detector=detector, policy=policy, refreshed=time.monotonic())
 
 
 def demo_detector() -> tuple[Detector, list]:
@@ -81,6 +84,11 @@ class ShinafureGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
         if detector is not None:
             configure(detector, policy or "flag")
+        elif _state["detector"] is None and os.environ.get("SHINAFURE_REGISTRY_URL"):
+            from ..remote import RemoteRegistry
+            remote = RemoteRegistry(os.environ["SHINAFURE_REGISTRY_URL"], os.environ["SHINAFURE_PROVIDER_TOKEN"])
+            name = os.environ.get("SHINAFURE_PROVIDER_NAME", "litellm-gateway")
+            configure(Detector(remote, "", name), policy or os.environ.get("SHINAFURE_POLICY", "flag"))
         elif _state["detector"] is None and os.environ.get("SHINAFURE_DEMO"):
             configure(demo_detector()[0], policy or os.environ.get("SHINAFURE_POLICY", "flag"))
 
@@ -91,6 +99,9 @@ class ShinafureGuardrail(CustomGuardrail):
         text = request_text(data)
         if not text:
             return data
+        if time.monotonic() - _state["refreshed"] > _state["refresh_every"]:
+            _state["refreshed"] = time.monotonic()        # pick up canaries registered since the last fetch
+            await asyncio.to_thread(det.refresh)
         d = await asyncio.to_thread(det.scan, text)      # CPU work off the event loop
         data.setdefault("metadata", {})["shinafure"] = {"confirmed": len(d.confirmed), "suspect": len(d.suspect)}
         if d.confirmed and _state["policy"] == "block":

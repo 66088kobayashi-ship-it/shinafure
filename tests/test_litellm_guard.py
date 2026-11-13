@@ -52,3 +52,19 @@ def test_no_detector_means_no_op():
     g = lg.ShinafureGuardrail(guardrail_name="shinafure")
     d = chat("x")
     assert run(g.async_pre_call_hook(None, None, d, "acompletion")) is d
+
+
+def test_new_canaries_are_picked_up_after_refresh(demo):
+    import random
+    from shinafure.canary import make_canaries
+    from shinafure.registry import register_canaries
+    det, _ = demo
+    g = lg.ShinafureGuardrail(detector=det, policy="flag", guardrail_name="shinafure")
+    late = make_canaries(1, "late", "kanari.example", random.Random(99))
+    register_canaries(det.registry, "demo", late)
+    lg._state["refresh_every"] = 0.0
+    try:
+        out = run(g.async_pre_call_hook(None, None, chat(late[0].person["email"]), "acompletion"))
+    finally:
+        lg._state["refresh_every"] = 300.0
+    assert out["metadata"]["shinafure"]["confirmed"] == 1

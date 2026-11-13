@@ -305,6 +305,16 @@ v0.4 で登録した F は v0.5 では使えません（F の定義と DOMAIN �
 
 ## v0.7 の変更：LiteLLM のガードレール（`shinafure/integrations/litellm_guard.py`）
 
-LiteLLM の `CustomGuardrail.async_pre_call_hook` に照合を入れました。リクエストの `messages`・`prompt`・`input`・`system` から利用者が書いた文字列をすべて集め、`Detector.scan` を別スレッドで実行します（イベントループを止めない）。結果は `data["metadata"]["shinafure"]` に記録し、方針が block なら確定一致で HTTP 403 を返します。台帳の検出器は `configure()` で渡すか、試用なら `SHINAFURE_DEMO=1` で実験用カナリア5人の台帳を同じプロセスに立てます。本番では台帳は別のサービスで、OPRF・接頭辞フィルタ・F の一覧をネットワーク越しに提供する必要があります（未実装）。
+LiteLLM の `CustomGuardrail.async_pre_call_hook` に照合を入れました。リクエストの `messages`・`prompt`・`input`・`system` から利用者が書いた文字列をすべて集め、`Detector.scan` を別スレッドで実行します（イベントループを止めない）。結果は `data["metadata"]["shinafure"]` に記録し、方針が block なら確定一致で HTTP 403 を返します。台帳の検出器は `configure()` で渡すか、試用なら `SHINAFURE_DEMO=1` で実験用カナリア5人の台帳を同じプロセスに立てます。本番では台帳は別のサービスです（v0.8 で実装）。
 
 確認：LiteLLM 1.109.1 のプロキシ（モデルは mock_response）で、普通の名簿は200、カナリア入りは403、登録者への通知を確認。プロキシは master key なしでは起動しないので、試すときも `LITELLM_MASTER_KEY` を設定します。
+
+## v0.8 の変更：台帳の HTTP サービス（`shinafure/service.py`、`shinafure/remote.py`）
+
+FastAPI で台帳を公開します。役割はトークンで分けます。管理者（提供者と登録者を作る）、登録者（ドメインと番号ブロックの確認、チケット、F の登録）、提供者（接頭辞フィルタと F の一覧、照会、報告）。OPRF の計算は登録者と提供者の両方が使い、呼び出し元ごとに回数を制限します。値はすべて16進数で、流れるのは目隠しした点、F、接頭辞、封印した開示だけです。`RemoteRegistry` は `Registry` と同じメソッドを持つので、`Detector` と `register_ticketed` はそのまま使えます。
+
+LiteLLM のガードレールは `SHINAFURE_REGISTRY_URL` と `SHINAFURE_PROVIDER_TOKEN` で台帳サービスにつなぎ、`SHINAFURE_REFRESH_SECONDS`（既定300秒）ごとに一覧を取り直します。
+
+確認：`tests/test_service.py`（4本）で、HTTP 越しの登録から通知まで、悪用の阻止、役割の制限、通信に平文とプロンプトが含まれないことを確かめました。別プロセスの台帳サービス（uvicorn）と LiteLLM 1.109 プロキシでも、普通の名簿200、カナリア入り403、通知を確認しました。
+
+未実装：トークンの保存と失効、台帳の永続化（今はメモリ上）、TLS の設定（前段のリバースプロキシに任せる前提）、通知の再送。
