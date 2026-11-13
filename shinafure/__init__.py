@@ -6,4 +6,4 @@ from .registry import Detector, Registry, register_canaries, register_ticketed
 
 __all__ = ["Canary", "make_canaries", "Detector", "Registry", "register_canaries", "register_ticketed",
            "Opening", "Ticket", "canary_from_ticket", "new_opening"]
-__version__ = "0.8.0"
+__version__ = "0.9.0"

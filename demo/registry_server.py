@@ -10,7 +10,8 @@ from fastapi import Body
 from shinafure.registry import Registry
 from shinafure.service import create_app
 TXT, SMS = {}, []
-app = create_app(Registry(), os.environ["SHINAFURE_ADMIN_TOKEN"], resolve_txt=lambda n: TXT.get(n, []),
+from shinafure.store import PersistentRegistry
+app = create_app(PersistentRegistry(os.environ["SHINAFURE_DB"]) if os.environ.get("SHINAFURE_DB") else Registry(), os.environ["SHINAFURE_ADMIN_TOKEN"], resolve_txt=lambda n: TXT.get(n, []),
                  send_sms=lambda num, code: SMS.append(code), notify=lambda who, r: print(f"NOTIFY {who} {r.canary_id} via {r.provider}", flush=True))
 
 @app.post("/demo/publish-txt")

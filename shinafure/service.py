@@ -17,6 +17,7 @@ Notifications go to the registrant's webhook URL (JSON POST), or to a
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import secrets
@@ -127,17 +128,41 @@ def create_app(registry: Optional[Registry] = None, admin_token: Optional[str] =
     admin = admin_token or os.environ.get("SHINAFURE_ADMIN_TOKEN") or ""
     if len(admin) < 16:
         raise RuntimeError("set an admin token of 16+ characters (SHINAFURE_ADMIN_TOKEN)")
-    registrants: dict[str, str] = {}          # token -> registrant name
-    providers: dict[str, tuple[str, str]] = {}  # token -> (provider name, registry api key)
-    app = FastAPI(title="品触れ registry", version="0.8")
+    # tokens are kept as SHA-256 hashes; with a PersistentRegistry they survive restarts
+    registrants: dict[str, str] = {}            # token hash -> registrant name
+    providers: dict[str, tuple[str, str]] = {}  # token hash -> (provider name, registry api key)
+    db = getattr(reg, "db", None)
+    app = FastAPI(title="品触れ registry", version="0.9")
+
+    def h(tok: str) -> str:
+        return hashlib.sha256(tok.encode()).hexdigest()
+
+    def hook_for(name: str, webhook_url: Optional[str]):
+        if notify:
+            reg.webhooks[name] = lambda r, n=name: notify(n, r)
+        elif webhook_url:
+            reg.webhooks[name] = lambda r, u=webhook_url: _webhook_post(u, r)
+
+    def remember(tok_hash: str, role: str, name: str, ref: str = "", webhook: Optional[str] = None) -> None:
+        if db is not None:
+            with reg.lock, db:
+                db.execute("INSERT INTO tokens VALUES(?, ?, ?, ?, ?)", (tok_hash, role, name, ref, webhook))
+
+    if db is not None:
+        for th, role, name, ref, webhook in db.execute("SELECT * FROM tokens"):
+            if role == "registrant":
+                registrants[th] = name
+                hook_for(name, webhook)
+            else:
+                providers[th] = (name, ref)
 
     def bearer(authorization: str = Header(default="")) -> str:
         if not authorization.startswith("Bearer "):
             raise HTTPException(401, "missing bearer token")
-        return authorization[7:]
+        return h(authorization[7:])
 
     def is_admin(tok: str = Depends(bearer)) -> None:
-        if not hmac.compare_digest(tok, admin):
+        if not hmac.compare_digest(tok, h(admin)):
             raise HTTPException(403, "admin only")
 
     def registrant(tok: str = Depends(bearer)) -> str:
@@ -161,17 +186,16 @@ def create_app(registry: Optional[Registry] = None, admin_token: Optional[str] =
     @app.post("/admin/providers", dependencies=[Depends(is_admin)])
     def add_provider(b: Name):
         tok = secrets.token_urlsafe(24)
-        providers[tok] = (b.name, reg.add_provider(b.name))
+        providers[h(tok)] = (b.name, reg.add_provider(b.name))
+        remember(h(tok), "provider", b.name, providers[h(tok)][1])
         return {"token": tok}
 
     @app.post("/admin/registrants", dependencies=[Depends(is_admin)])
     def add_registrant(b: Name):
         tok = secrets.token_urlsafe(24)
-        registrants[tok] = b.name
-        if notify:
-            reg.webhooks[b.name] = lambda r, n=b.name: notify(n, r)
-        elif b.webhook_url:
-            reg.webhooks[b.name] = lambda r, u=b.webhook_url: _webhook_post(u, r)
+        registrants[h(tok)] = b.name
+        hook_for(b.name, b.webhook_url)
+        remember(h(tok), "registrant", b.name, "", b.webhook_url)
         return {"token": tok}
 
     # ----------------------------------------------------------- OPRF
@@ -254,9 +278,13 @@ def create_app(registry: Optional[Registry] = None, admin_token: Optional[str] =
 
 def _lazy_app():
     try:
+        path = os.environ.get("SHINAFURE_DB")
+        if path:
+            from .store import PersistentRegistry
+            return create_app(PersistentRegistry(path))
         return create_app()
     except RuntimeError:
         return None
 
 
-app = _lazy_app()     # for `uvicorn shinafure.service:app` (needs SHINAFURE_ADMIN_TOKEN)
+app = _lazy_app()     # for `uvicorn shinafure.service:app` (needs SHINAFURE_ADMIN_TOKEN; SHINAFURE_DB=path keeps state)

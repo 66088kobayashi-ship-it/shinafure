@@ -213,7 +213,7 @@ guardrails:
 
 「印を付けて通す」と「止める」の2つの方針を選べます。本物の LiteLLM プロキシ（版 1.109）で試すと、普通の名簿はそのまま AI に届き、カナリア入りの名簿は HTTP 403 で止まり、登録者に通知が届きました。プロンプトは中継サーバーから出ません。台帳に行くのは目隠しした候補だけです。
 
-台帳は独立した HTTP サービスとして動かせます（v0.8、`shinafure/service.py`）。管理者・登録者・提供者の3つの役割をトークンで分けて、通信にはカナリアの平文もプロンプトも流れません。台帳サービスと LiteLLM を別々のプロセスで立てて試すと、普通の名簿は200、カナリア入りは403で止まり、台帳サービスから登録者に通知が届きました。中継サーバーは台帳の一覧を5分ごとに取り直すので、あとから登録されたカナリアも検出します。
+台帳は独立した HTTP サービスとして動かせます（v0.8、`shinafure/service.py`）。管理者・登録者・提供者の3つの役割をトークンで分けて、通信にはカナリアの平文もプロンプトも流れません。台帳サービスと LiteLLM を別々のプロセスで立てて試すと、普通の名簿は200、カナリア入りは403で止まり、台帳サービスから登録者に通知が届きました。中継サーバーは台帳の一覧を5分ごとに取り直すので、あとから登録されたカナリアも検出します。台帳は SQLite のファイル1つに保存でき（v0.9、`SHINAFURE_DB`）、再起動しても登録・チケット・トークン・記録が残ります。トークンはハッシュにして保存し、OPRF の鍵は環境変数で渡せばファイルに残りません。
 
 ```bash
 SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHINAFURE_POLICY=block litellm --config config.yaml
@@ -250,7 +250,7 @@ SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHI
 
 試作は Python で書き、すべての実験を手元の PC で再現できます。有料の API は使っていません。
 
-- コード：このリポジトリ（品触れ v0.8、テスト55本）。
+- コード：このリポジトリ（品触れ v0.9、テスト58本）。
 - 保存記録：[Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) に2026年11月9日に保存（`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`）。
 - 合成データとコーパスの実験：`python -m demo.measure corpus`（約1分）
 - 本物の LLM の実験：[Ollama](https://ollama.com) で qwen2.5:7b を動かし、`python -m demo.llm_eval --backend ollama --chunks 4 --rows 20` を実行します。GPU の無いノート PC で約2時間かかりました。
@@ -272,7 +272,7 @@ SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHI
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 55本
+pytest -q                       # 58本
 ```
 
 | 場所 | 中身 |
@@ -288,6 +288,7 @@ pytest -q                       # 55本
 | `scripts/build_tables.py` | 住所表と名前表の作成 |
 | `shinafure/integrations/litellm_guard.py` | LiteLLM のガードレール（照合して印を付ける／止める） |
 | `shinafure/service.py` | 台帳の HTTP サービス（管理者・登録者・提供者のトークン） |
+| `shinafure/store.py` | 台帳を SQLite に保存（再起動しても残る） |
 | `shinafure/remote.py` | 台帳サービスのクライアント（検出器と登録をそのまま使える） |
 | `demo/registry_server.py` | 試用の台帳サーバー（DNS と SMS の確認を手元で代行） |
 | `shinafure/proxy.py` | OpenAI 互換のプロキシ（照合して印を付ける／止める） |
