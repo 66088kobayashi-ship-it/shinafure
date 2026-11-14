@@ -6,7 +6,7 @@ LiteLLM proxy (config.yaml):
       - guardrail_name: shinafure
         litellm_params:
           guardrail: shinafure.integrations.litellm_guard.ShinafureGuardrail
-          mode: pre_call
+          mode: [pre_call, post_call]      # post_call: also check what the model sends back
           default_on: true
 
 The guardrail needs a Detector (a provider's view of a registry):
@@ -18,6 +18,14 @@ The guardrail needs a Detector (a provider's view of a registry):
 policy "flag"  : let the request through, record the result in
                  data["metadata"]["shinafure"] and report confirmed canaries
 policy "block" : also refuse requests that contain a confirmed canary (HTTP 403)
+
+Where it looks (v1.3)
+  pre_call  : every request, including tool results and the arguments of
+              earlier tool calls in the conversation
+  post_call : the model's answer, including tool calls an agent is about to
+              make (data leaving through a tool), for normal and streamed
+              responses. With policy "block" a streamed answer is held back
+              until it has been checked.
 
 The prompt never leaves the gateway: only blinded candidates go to the
 registry, and only canary IDs go to the registrant.
@@ -55,28 +63,52 @@ def demo_detector() -> tuple[Detector, list]:
     return Detector(reg, reg.add_provider("litellm-gateway"), "litellm-gateway"), cs
 
 
+_TEXT_KEYS = ("content", "input", "arguments", "output", "output_text", "tool_calls", "function", "delta", "message")
+
+
+def _collect(v, parts: list[str]) -> None:
+    if isinstance(v, str):
+        parts.append(v)
+    elif isinstance(v, list):
+        for x in v:
+            _collect(x, parts)
+    elif isinstance(v, dict):
+        if isinstance(v.get("text"), str):
+            parts.append(v["text"])
+        for k in _TEXT_KEYS:
+            if k in v:
+                _collect(v[k], parts)
+
+
 def request_text(data: dict) -> str:
-    """Every piece of user-controlled text in a chat, completion, responses
-    or embedding request."""
+    """Every piece of user-controlled text in a chat, completion, responses,
+    embedding or MCP tool-call request (tool definitions are not included)."""
     parts: list[str] = []
-
-    def take(v):
-        if isinstance(v, str):
-            parts.append(v)
-        elif isinstance(v, list):
-            for x in v:
-                take(x)
-        elif isinstance(v, dict):
-            if isinstance(v.get("text"), str):
-                parts.append(v["text"])
-            for k in ("content", "input", "arguments"):
-                if k in v:
-                    take(v[k])
-
-    for key in ("messages", "prompt", "input", "system"):
+    for key in ("messages", "prompt", "input", "system", "arguments"):
         if key in data:
-            take(data[key])
+            _collect(data[key], parts)
     return "\n".join(parts)
+
+
+def response_text(response: Any) -> str:
+    """The text a model sends back: message content and tool-call arguments
+    (chat), or output items (responses API)."""
+    obj = response.model_dump() if hasattr(response, "model_dump") else response
+    parts: list[str] = []
+    if isinstance(obj, dict):
+        for key in ("choices", "output", "content", "output_text"):
+            if key in obj:
+                _collect(obj[key], parts)
+    return "\n".join(parts)
+
+
+def _refuse(where: str):
+    msg = f"{where} contains stolen data (品触れ)"
+    try:
+        from fastapi import HTTPException
+    except ImportError:
+        raise PermissionError(msg)
+    raise HTTPException(status_code=403, detail=msg)
 
 
 class ShinafureGuardrail(CustomGuardrail):
@@ -105,9 +137,35 @@ class ShinafureGuardrail(CustomGuardrail):
         d = await asyncio.to_thread(det.scan, text)      # CPU work off the event loop
         data.setdefault("metadata", {})["shinafure"] = {"confirmed": len(d.confirmed), "suspect": len(d.suspect)}
         if d.confirmed and _state["policy"] == "block":
-            try:
-                from fastapi import HTTPException
-            except ImportError:                        # SDK use without the proxy
-                raise PermissionError("request contains stolen data (品触れ)")
-            raise HTTPException(status_code=403, detail="request contains stolen data (品触れ)")
+            _refuse("request")
         return data
+
+    async def _check_output(self, text: str, data: dict) -> None:
+        det = _state["detector"]
+        if det is None or not text:
+            return
+        d = await asyncio.to_thread(det.scan, text)
+        data.setdefault("metadata", {})["shinafure_output"] = {"confirmed": len(d.confirmed), "suspect": len(d.suspect)}
+        if d.confirmed and _state["policy"] == "block":
+            _refuse("response")
+
+    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: Any, response: Any):
+        await self._check_output(response_text(response), data)
+        return response
+
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict: Any, response: Any, request_data: dict):
+        if _state["detector"] is None:
+            async for chunk in response:
+                yield chunk
+            return
+        held, parts = [], []
+        block = _state["policy"] == "block"
+        async for chunk in response:
+            parts.append(response_text(chunk))
+            if block:
+                held.append(chunk)          # nothing reaches the caller before the check
+            else:
+                yield chunk
+        await self._check_output("".join(parts), request_data)
+        for chunk in held:
+            yield chunk

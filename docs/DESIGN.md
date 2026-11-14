@@ -360,3 +360,14 @@ OPRF の鍵 k は `key_hex` か `SHINAFURE_REGISTRY_KEY` で渡せばファイ�
 - 文の雛形も表の版（`tables.version()`）に含めます。
 
 確認：`tests/test_more_kinds.py`（7本）。設定ファイル・コード・JSON の API キー、打ち直し・見出し・箇条書きの一文を検出、言い換えと文中の改行は検出しない、他人の鍵を登録しても通知されない、種類がコミットに含まれる、普通の文に鍵の誤候補が出ない。1,500人分（3種類×500）で約950万文字を照合して確定0件。
+
+## v1.3 の変更：AI の出力とエージェントのツール呼び出しも照合（`shinafure/integrations/litellm_guard.py`）
+
+- **入力側の拡張**：`request_text` が、会話中のツールの結果（role が tool の content）と、過去のツール呼び出しの引数（`tool_calls[].function.arguments`）、MCP のツール呼び出しの `arguments` も集めます。ツールの定義（説明文やスキーマ）は集めません。
+- **出力側**：`async_post_call_success_hook` で、答えの本文（`choices[].message.content`）と、エージェントが呼ぼうとしているツールの引数（`message.tool_calls[].function.arguments`）、Responses API の `output` を照合します。結果は `data["metadata"]["shinafure_output"]`。方針が block なら 403。
+- **ストリーミング**：`async_post_call_streaming_iterator_hook` で断片をつないで照合します。block では全断片を溜め、照合が済んでから流します（照合前に1文字も出さない代わりに、最初の文字が遅れる）。flag では流しながら溜め、最後に照合します。
+- 設定は `mode: [pre_call, post_call]`。
+
+確認：`tests/test_litellm_guard.py` に3本追加（計8本、全体72本）。本物の LiteLLM 1.109.1 プロキシ（モデルは mock_response と mock_tool_calls）で、普通の答え200、答えの中のカナリア403、ストリーミング403（エラーより前に本文が出ないこと）、送信ツールの引数のカナリア403、ツールの結果のカナリア403、それぞれ登録者への通知を確認。
+
+未対応：ストリーミングで flag のとき、照合より前に本文は呼び出し元へ届きます（記録と通知だけ）。画像・音声の中の文字は照合しません。

@@ -228,7 +228,7 @@ guardrails:
   - guardrail_name: shinafure
     litellm_params:
       guardrail: shinafure.integrations.litellm_guard.ShinafureGuardrail
-      mode: pre_call
+      mode: [pre_call, post_call]
       default_on: true
 ```
 
@@ -239,6 +239,19 @@ The registry can run as a separate HTTP service (v0.8, `shinafure/service.py`). 
 ```bash
 SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHINAFURE_POLICY=block litellm --config config.yaml
 ```
+
+Since v1.3 Shinafure checks what comes out of the model as well as what goes in (add `post_call` to `mode`). The case in mind is an AI agent that reads an internal database or files and sends the contents somewhere.
+
+| Where it checks | Example | Real LiteLLM proxy (policy "block") |
+| --- | --- | --- |
+| Request | A customer list pasted with "reformat this" | 403 |
+| Tool result | Rows an agent read from a database enter the conversation | 403 |
+| Model answer | A canary's email appears in the answer | 403 |
+| Model answer (streamed) | The same, sent in pieces | 403 (nothing is sent before the check) |
+| Tool call | An agent puts a canary in the body of a send-email tool call | 403 |
+| Ordinary exchange | "Done, reformatted." | 200 |
+
+In a stream, a canary split across several chunks is still found. With policy "block" the answer is held back until it has been checked, so the first character arrives later; with "flag" the stream passes through as it is checked.
 
 ## Limitations
 
@@ -271,7 +284,7 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v1.2, 69 tests).
+- Code: this repository (Shinafure v1.3, 72 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.

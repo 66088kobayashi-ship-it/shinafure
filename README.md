@@ -228,7 +228,7 @@ guardrails:
   - guardrail_name: shinafure
     litellm_params:
       guardrail: shinafure.integrations.litellm_guard.ShinafureGuardrail
-      mode: pre_call
+      mode: [pre_call, post_call]
       default_on: true
 ```
 
@@ -239,6 +239,19 @@ guardrails:
 ```bash
 SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHINAFURE_POLICY=block litellm --config config.yaml
 ```
+
+v1.3 からは、AI に入るものだけでなく、AI から出るものも照合します（`mode` に `post_call` を足す）。AI エージェントが社内のデータベースやファイルを読み、その中身を外へ送る場面を想定しています。
+
+| 照合する場所 | 例 | 本物の LiteLLM プロキシ（方針「止める」） |
+| --- | --- | --- |
+| 依頼 | 名簿を貼って「整形して」 | 403 |
+| ツールの結果 | エージェントが DB から読んだ行が会話に入る | 403 |
+| AI の答え | 答えの中にカナリアのメールが出る | 403 |
+| AI の答え（ストリーミング） | 同上を少しずつ返す | 403（照合が済むまで1文字も返さない） |
+| ツールの呼び出し | エージェントがメール送信ツールの本文にカナリアを入れる | 403 |
+| 普通のやりとり | 「整形しました」 | 200 |
+
+ストリーミングでは、カナリアが複数の断片に分かれて届いても見つけます。方針が「止める」のときは答えを最後まで溜めて照合してから返すので、最初の文字が届くまでの時間は長くなります。方針が「印を付けて通す」なら、そのまま流しながら照合します。
 
 ## 限界
 
@@ -271,7 +284,7 @@ SHINAFURE_REGISTRY_URL=https://registry.example SHINAFURE_PROVIDER_TOKEN=... SHI
 
 試作は Python で書き、すべての実験を手元の PC で再現できます。有料の API は使っていません。
 
-- コード：このリポジトリ（品触れ v1.2、テスト69本）。
+- コード：このリポジトリ（品触れ v1.3、テスト72本）。
 - 保存記録：[Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) に2026年11月9日に保存（`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`）。
 - 合成データとコーパスの実験：`python -m demo.measure corpus`（約1分）
 - 本物の LLM の実験：[Ollama](https://ollama.com) で qwen2.5:7b を動かし、`python -m demo.llm_eval --backend ollama --chunks 4 --rows 20` を実行します。GPU の無いノート PC で約2時間かかりました。
