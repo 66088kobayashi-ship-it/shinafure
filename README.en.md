@@ -173,6 +173,17 @@ v0.6 reduces chance coincidences further. Canary addresses are drawn from real t
 
 These figures assume drawing 100 tickets a day. With 1,000 canaries on real addresses registered, checking about 9.5 million characters of documents and customer lists produced zero confirmed matches.
 
+## Canaries other than people
+
+Since v1.2 there are two more kinds of canary. Like people, they come from the registry's random tickets and are checked by the registry before any notification.
+
+- **Fake API keys**: a generic prefix such as `svc_prod_` followed by 32 to 40 random characters. No real company's key format is used, so other companies' leak scanners are not sent false reports. They are found in config files, source code and JSON alike.
+- **Confidential sentences**: a sentence that exists nowhere else, such as "経営企画部のノタクヤ構想は、1月24日にリネト工業と3683万円で最終合意する予定。", to be planted in internal documents. They are found even with spaces or commas changed, or with a heading ("議事録：") or list marker in front.
+
+With 1,500 canaries registered (500 each of people, API keys and sentences), checking about 9.5 million characters produced zero false confirmations. Checking sentences slowed Japanese from about 1.83 to about 1.23 million characters per second.
+
+Sentence canaries have a weakness: they are missed if reworded or broken across lines.
+
 ## Matching speed
 
 In v0.5, matching is about 14 times faster than in v0.4 (about 30 times for Japanese). Detection results are exactly the same as in v0.4.
@@ -260,7 +271,7 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v1.0, 61 tests).
+- Code: this repository (Shinafure v1.2, 69 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
@@ -282,7 +293,7 @@ This article discloses the mechanisms described here as prior art (a defensive p
 
 ```bash
 pip install -e ".[test]"
-pytest -q                       # 61 tests
+pytest -q                       # 69 tests
 ```
 
 | Path | Contents |
