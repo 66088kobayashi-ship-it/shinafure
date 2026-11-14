@@ -10,11 +10,15 @@ check is the hot loop.
     numpy (about 60 vector operations per text, not 4 Python calls per
     character). A pure-Python fallback gives identical values.
   * Other tokens (e:, p:, t:, a:, r:) are few; they keep a SHA-256 prefix.
-  * PREFIX_BITS is 32 (24 in v0.4). With 1,000 canaries registered, a
-    24-bit filter sent about 1,600 false-positive lookups per million
-    Japanese characters to the registry; 32 bits cuts that by 256x. A leaked
+  * PREFIX_BITS is 48 (24 in v0.4, 32 in v0.5-v1.0). Japanese text yields
+    about 3.3 million distinct name windows per million characters, so the
+    false-positive lookups per million characters are about
+    3.3e6 x tokens / 2^bits. With 8 million registered tokens (a million
+    canaries) that was 6,000 at 32 bits, and is under 0.1 at 48. A leaked
     filter is an oracle either way (see README), so the wider prefix costs
     nothing that was not already lost.
+  * The provider keeps the filter and the F list as sorted numpy arrays
+    (8 bytes per entry), not Python sets.
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ except ImportError:          # pragma: no cover - exercised by forcing HAVE_NUMP
     np = None
 
 HAVE_NUMPY = np is not None
-PREFIX_BITS = 32
+PREFIX_BITS = 48
 _M = (1 << 64) - 1
 _BASE = 0x100000001B3                       # FNV-64 prime: odd, large
 _SEED = 0x6A09E667F3BCC909                  # SHA-512 IV word, any constant works
@@ -56,10 +60,14 @@ def prefix(token: str) -> int:
     return int.from_bytes(d[:8], "big") >> (64 - PREFIX_BITS)
 
 
-def other_hits(tokens, filt: frozenset[int]) -> set[str]:
+def other_hits(tokens, filt) -> set[str]:
     """Non-name tokens whose prefix is in the filter (same value as prefix())."""
     sha, pfx, fb, shift = hashlib.sha256, b"shinafure-v1|P|", int.from_bytes, 64 - PREFIX_BITS
-    return {t for t in set(tokens) if (fb(sha(pfx + t.encode()).digest()[:8], "big") >> shift) in filt}
+    uniq = list(set(tokens))
+    pfs = [fb(sha(pfx + t.encode()).digest()[:8], "big") >> shift for t in uniq]
+    if isinstance(filt, PrefixFilter):
+        return {t for t, ok in zip(uniq, filt.contains_many(pfs)) if ok}
+    return {t for t, p in zip(uniq, pfs) if p in filt}
 
 
 def _is_cjk(ch: str) -> bool:
@@ -133,17 +141,65 @@ if HAVE_NUMPY:
         return count, hits
 
 
+def _sorted_u64(values):
+    a = np.fromiter(values, dtype=np.uint64)
+    a.sort()
+    return np.unique(a)
+
+
+def _in_sorted(a, xs) -> "np.ndarray":
+    if a.size == 0:
+        return np.zeros(len(xs), dtype=bool)
+    x = np.asarray(xs, dtype=np.uint64)
+    pos = np.searchsorted(a, x)
+    pos[pos == a.size] = 0
+    return a[pos] == x
+
+
 class PrefixFilter:
     """The provider's copy of the registry's prefix filter."""
 
     def __init__(self, prefixes) -> None:
-        self.set = frozenset(prefixes)
-        self.sorted = np.array(sorted(self.set), dtype=np.uint64) if HAVE_NUMPY else None
+        if HAVE_NUMPY:
+            self.sorted, self._set = _sorted_u64(prefixes), None
+        else:
+            self.sorted, self._set = None, frozenset(prefixes)
+
+    @property
+    def set(self) -> frozenset[int]:          # pure-Python paths and tests
+        if self._set is None:
+            self._set = frozenset(int(x) for x in self.sorted)
+        return self._set
 
     def __contains__(self, p: int) -> bool:
-        return p in self.set
+        if self.sorted is not None:
+            return bool(_in_sorted(self.sorted, [p])[0])
+        return p in self._set
+
+    def contains_many(self, ps) -> list[bool]:
+        if self.sorted is not None:
+            return _in_sorted(self.sorted, ps).tolist() if ps else []
+        return [p in self._set for p in ps]
 
     def name_hits(self, joined: str, use_numpy: bool = True) -> tuple[int, list[str]]:
         if use_numpy and HAVE_NUMPY:
             return name_window_hits_np(joined, self.sorted)
         return name_window_hits_py(joined, self.set)
+
+
+class FValueSet:
+    """The provider's copy of the registered F values: the first 8 bytes of
+    each, sorted. A false match (about tokens / 2^64) only costs one lookup,
+    which then returns nothing."""
+
+    def __init__(self, fs) -> None:
+        self._np = HAVE_NUMPY
+        keys = (int.from_bytes(f[:8], "big") for f in fs)
+        self._a = _sorted_u64(keys) if self._np else frozenset(keys)
+
+    def __contains__(self, f: bytes) -> bool:
+        k = int.from_bytes(f[:8], "big")
+        return bool(_in_sorted(self._a, [k])[0]) if self._np else k in self._a
+
+    def __len__(self) -> int:
+        return len(self._a)

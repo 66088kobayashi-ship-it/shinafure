@@ -44,7 +44,7 @@ from typing import Callable, Iterable, Optional
 
 from . import ec, group, tables
 from .canary import Canary
-from .fastscan import PrefixFilter, other_hits, prefix
+from .fastscan import FValueSet, PrefixFilter, other_hits, prefix
 from .issuance import Opening, Ticket, canary_from_ticket, seal, unseal, valid_block
 from .tokens import NAME_KINDS, PARTNER_KINDS, STRONG, person_tokens, split_candidates
 
@@ -360,7 +360,7 @@ class Detector:
 
     def refresh(self) -> None:
         self._filter = PrefixFilter(self.registry.prefix_filter(self.api_key))
-        self._fvals = self.registry.f_values(self.api_key)
+        self._fvals = FValueSet(self.registry.f_values(self.api_key))
 
     def scan(self, text: str, report: bool = True, use_numpy: bool = True) -> Detection:
         det = Detection()
@@ -368,7 +368,7 @@ class Detector:
         others, joined = split_candidates(text)
         n_windows, name_hits = self._filter.name_hits(joined, use_numpy)
         det.candidates = len(others) + n_windows
-        toks = other_hits(others, self._filter.set)
+        toks = other_hits(others, self._filter)
         toks.update("n:" + w for w in name_hits)
         for tok in sorted(toks):
             r, b = blind(tok)

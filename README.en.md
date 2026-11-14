@@ -46,7 +46,7 @@ Only F values go into the registry, and only blinded candidates go from the prov
 1. **Make canaries.** Mix customers who do not exist into the data you protect. Emails use a domain you control plus a random suffix; phone numbers are numbers you own. 80% of the names are ordinary and 20% are rare (see "Finding" for why).
 2. **Turn them into matching tokens.** Strong tokens are the email and the phone number. Weak tokens are the name (kanji, katakana, hiragana, and romanized in either order), the address, and the last 8 digits of the phone number. Full-width and half-width characters, +81 formats, and address variants such as "9丁目17番3号" and "9-17-3" are normalized to the same value.
 3. **Register.** With a secret key k, the registry turns token t into F(t) = SHA256(x-coordinate of k·H(t)) (an OPRF on P-256). The registrant blinds t before asking for the computation, so the registry cannot tell what was registered. Only F values remain in the registry.
-4. **The provider checks inputs.** The provider runs candidates extracted from the input through a 32-bit prefix filter, locally. Only candidates that pass are blinded and sent to the registry to compute F, which the provider compares with its own copy of the list of registered F values. Only on a match does it ask the registry for that canary's registration details. The number of computations is rate-limited per provider.
+4. **The provider checks inputs.** The provider runs candidates extracted from the input through a 48-bit prefix filter, locally. Only candidates that pass are blinded and sent to the registry to compute F, which the provider compares with its own copy of the list of registered F values. Only on a match does it ask the registry for that canary's registration details. The number of computations is rate-limited per provider.
 5. **Decide.** A canary is *confirmed*, and the registrant notified, when any of the following holds. Anything else is *suspect* and is not notified.
    - One strong token matches.
    - Two weak tokens of different kinds match, one of which is the address or the last 8 phone digits.
@@ -181,7 +181,7 @@ With 1,000 canaries registered, v0.4 could check only about 50,000 Japanese char
 
 1. **Curve arithmetic in OpenSSL.** F is now derived from the point's x-coordinate alone, so elliptic-curve multiplication can be handed to OpenSSL's ECDH. Each one drops from about 1.6 ms to about 0.07 ms. The pure-Python implementation remains, and both give the same values.
 2. **Name candidates computed in bulk.** Name candidates now use a polynomial hash for their prefix, and all candidates in a text are computed at once with numpy.
-3. **Prefix widened from 24 to 32 bits.** Candidates that pass the filter by chance drop to 1/256. A leaked filter can be abused at 24 bits just the same.
+3. **Prefix widened from 24 to 32 bits.** Candidates that pass the filter by chance drop to 1/256 (48 bits since v1.1). A leaked filter can be abused at 24 bits just the same.
 
 Measured with 1,000 canaries registered, in one thread (`python -m demo.bench corpus`). v0.4 figures are the faster of 2 runs; v0.5 figures are the fastest of 3.
 
@@ -197,6 +197,16 @@ Measured with 1,000 canaries registered, in one thread (`python -m demo.bench co
 The number of candidates, the confirmed set and the suspect set all matched v0.4. English gains less because English text has few name candidates to begin with. The customer CSV needs more lookups because real customers' names coincide with ordinary-name canaries and become suspects.
 
 This version also closes a privacy gap. In v0.4, even candidates that merely passed the prefix filter by chance had their F sent to the registry to check whether it was registered. The registry holds the key k, so by trying common names it could guess whose name an F belonged to. In v0.5, providers keep the list of registered F values and ask the registry only about matches. The list of F values alone cannot be compared with plaintext without the registry's OPRF.
+
+Growth was measured too (v1.1, `python -m demo.scale`). Up to v1.0, with a million canaries (8 million registered tokens), Japanese dropped to about 200,000 characters per second: candidates passing the 32-bit prefix by chance caused about 6,000 lookups per million characters. The prefix is now 48 bits, and the provider keeps its lists as numpy arrays.
+
+| Canaries registered | Provider list memory | Japanese (chars/s) | English (chars/s) | Chance lookups |
+| --- | --- | --- | --- | --- |
+| 1,000 | under 0.1 MB | 1.83M | 3.45M | 0 |
+| 100,000 | 13 MB | 1.46M | 3.73M | 0 |
+| 1,000,000 | 128 MB | 1.25M | 3.42M | 0 |
+
+The 5 planted canaries were detected at every size.
 
 ## Plugging into an AI gateway
 
@@ -227,7 +237,7 @@ Shinafure works only when data reaches a participating AI with personal values i
 - **If personal values disappear, it cannot detect.** For example, when the data is summarized, rows are deleted, or surnames and given names end up on separate rows.
 - **Canaries that are spotted get removed.** If canary emails all share one domain, an attacker who notices will delete those rows. You need several ordinary-looking domains and phone numbers you own. The same applies if the prefix filter leaks; it is meant to be given only to participating providers.
 - **Abuse prevention still has a gap.** A canary from a legitimate ticket can, by chance, have the same name and address as a real person. Since v0.6 draws addresses from real town-chome units, drawing 100 tickets a day for a year gives at most about a 0.008% chance of hitting one specific person (about 0.0002% if addresses come from the whole country). The remaining bottleneck is the table of rare names (400 combinations). Number block verification is also a single SMS. And providers checking inputs at all needs to be squared with privacy law and, in Japan, the secrecy of communications.
-- **What was measured is narrow.** Only two real LLMs (qwen2.5:7b and granite3.3:8b) were tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; behavior with millions of canaries has not been measured.
+- **What was measured is narrow.** Only two real LLMs (qwen2.5:7b and granite3.3:8b) were tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; with a million canaries, Japanese still runs at about 1.25 million characters per second (v1.1).
 
 ## Prior art and differences
 
@@ -297,6 +307,7 @@ pytest -q                       # 61 tests
 | `demo/pool.py` | Pools repeated runs and runs Fisher's exact test |
 | `demo/abuse.py` | Abuse attempts and the results table |
 | `demo/bench.py` | Matching speed measurement |
+| `demo/scale.py` | Speed and memory as the registry grows to a million canaries |
 | `docs/DESIGN.md` | Design details, decision rules, changes per version (Japanese) |
 | `results.md` | Experiment 1 results tables (Japanese) |
 

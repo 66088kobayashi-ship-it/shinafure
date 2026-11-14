@@ -57,6 +57,7 @@ class PersistentRegistry(Registry):
         with self.db:
             self.db.executescript(SCHEMA)
         self._load_key(key_hex or os.environ.get("SHINAFURE_REGISTRY_KEY"))
+        self._check_format()
         self._load()
 
     # ------------------------------------------------------------ load
@@ -80,6 +81,20 @@ class PersistentRegistry(Registry):
             with self.db:
                 self.db.execute("INSERT INTO meta VALUES('key_check', ?)", (check,))
         self._k, self._kkey = k, group.backend.key(k)
+
+    def _check_format(self) -> None:
+        """Prefixes are computed by registrants; a database built with another
+        prefix width cannot be converted, only registered again."""
+        from .fastscan import PREFIX_BITS
+        row = self.db.execute("SELECT v FROM meta WHERE k='prefix_bits'").fetchone()
+        has_rows = self.db.execute("SELECT 1 FROM prefixes LIMIT 1").fetchone()
+        if row is None:
+            if has_rows:
+                raise ValueError("database from before v1.1 (32-bit prefixes): register the canaries again")
+            with self.db:
+                self.db.execute("INSERT INTO meta VALUES('prefix_bits', ?)", (str(PREFIX_BITS),))
+        elif int(row[0]) != PREFIX_BITS:
+            raise ValueError(f"database uses {row[0]}-bit prefixes, this code {PREFIX_BITS}")
 
     def _load(self) -> None:
         q = self.db.execute

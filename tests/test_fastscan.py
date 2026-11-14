@@ -5,7 +5,7 @@ import pytest
 
 from shinafure import group
 from shinafure.canary import make_canaries
-from shinafure.fastscan import HAVE_NUMPY, PrefixFilter, name_prefix, name_window_hits_py, prefix
+from shinafure.fastscan import HAVE_NUMPY, PREFIX_BITS, FValueSet, PrefixFilter, name_prefix, name_window_hits_py, prefix
 from shinafure.registry import DOMAIN, Detector, Registry, register_canaries
 from shinafure.tokens import candidates, name_windows, split_candidates
 
@@ -45,7 +45,7 @@ def test_numpy_windows_equal_reference(texts):
         assert n_np == n_py == len(ref)
         assert sorted(hits_np) == sorted(hits_py)
         assert picked <= set(hits_np)                                 # no false negatives
-        assert {w for w in ref if name_prefix(w) in filt.set} == set(hits_np)
+        assert {w for w in ref if name_prefix(w) in filt} == set(hits_np)
 
 
 def test_python_windows_equal_reference(texts):
@@ -55,11 +55,11 @@ def test_python_windows_equal_reference(texts):
         assert n == len(reference(text)) == sum(1 for _ in name_windows(joined))
 
 
-def test_prefix_is_32_bits_and_spread():
+def test_prefix_width_and_spread():
     vals = [prefix(f"n:{i}鷲見") for i in range(2000)] + [prefix(f"e:{i}@x.example") for i in range(2000)]
-    assert all(0 <= v < 2**32 for v in vals)
+    assert all(0 <= v < 2**PREFIX_BITS for v in vals)
     assert len(set(vals)) == len(vals)
-    assert sum(v >> 31 for v in vals) in range(1800, 2200)        # top bit roughly balanced
+    assert sum(v >> (PREFIX_BITS - 1) for v in vals) in range(1800, 2200)        # top bit roughly balanced
 
 
 @pytest.mark.skipif(group.backend.name != "openssl", reason="cryptography not installed")
@@ -125,3 +125,13 @@ def test_registry_never_sees_non_matching_lookups(world):
         reg.lookup = orig
     assert d.oprf_calls > 50                       # many windows went through the OPRF...
     assert len(seen) == 0 or all(reg._entries.get(f) for f in seen)   # ...but only real hits reached lookup
+
+
+def test_provider_lists_are_compact_and_exact():
+    import secrets
+    fs = [secrets.token_bytes(32) for _ in range(1000)]
+    fv = FValueSet(fs)
+    assert len(fv) == 1000 and all(f in fv for f in fs) and secrets.token_bytes(32) not in fv
+    pf = PrefixFilter({prefix(f"e:{i}@x.example") for i in range(500)})
+    assert prefix("e:3@x.example") in pf and prefix("e:9999@x.example") not in pf
+    assert pf.contains_many([prefix("e:1@x.example"), 12345]) == [True, False]
