@@ -38,6 +38,17 @@ REGIONS = {
 NATIONWIDE = ""
 BAN_MAX, GO_MAX = 30, 20       # 番 1-30, 号 1-20
 
+# secrets and sentences (v1.2). Secret prefixes are generic on purpose: no
+# real vendor's key format, so secret scanners do not report them to a vendor.
+SECRET_WORDS = ("key", "api", "svc", "int", "app", "tok", "acct", "cfg")
+SECRET_ENVS = ("prod", "live", "main", "core", "")
+BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+SENT_DEPTS = ("経営企画部", "営業本部", "法務部", "開発本部", "購買部", "人事部", "財務部", "事業開発室")
+SENT_KANA = "アカサタナハマヤラワイキシチニヒミリウクスツヌフムユルエケセテネヘメレオコソトノホモヨロ"
+SENT_SUFFIX = ("計画", "案件", "プロジェクト", "構想")
+SENT_PARTNERS = ("商事", "製作所", "ホールディングス", "工業", "システムズ", "物産")
+SENT_VERBS = ("最終合意する", "契約を更新する", "共同開発を始める", "条件を見直す", "提携を発表する")
+
 
 @lru_cache(maxsize=1)
 def _raw() -> tuple[bytes, bytes]:
@@ -47,7 +58,8 @@ def _raw() -> tuple[bytes, bytes]:
 @lru_cache(maxsize=1)
 def version() -> str:
     a, n = _raw()
-    rare = repr((SURNAMES, GIVEN, BUILDINGS)).encode()
+    rare = repr((SURNAMES, GIVEN, BUILDINGS, SECRET_WORDS, SECRET_ENVS, SENT_DEPTS, SENT_KANA, SENT_SUFFIX,
+                 SENT_PARTNERS, SENT_VERBS)).encode()
     return "jp-" + hashlib.sha256(a + b"\0" + n + b"\0" + rare).hexdigest()[:12]
 
 

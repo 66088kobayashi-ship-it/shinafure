@@ -63,17 +63,22 @@ class Opening:
     phone_block: str
     rare_permille: int = 200   # share of rare-name canaries, in 1/1000
     region: str = ""           # one of tables.REGIONS, or "" for the whole country
+    kind: str = "person"       # person | secret (an API key) | sentence (a line in a document)
 
     def commitment(self) -> bytes:
         h = hashlib.sha256(b"shinafure-commit-v2")
-        for part in (self.secret, self.domain.encode(), self.phone_block.encode(), str(self.rare_permille).encode(),
-                     self.region.encode()):
+        parts = [self.secret, self.domain.encode(), self.phone_block.encode(), str(self.rare_permille).encode(),
+                 self.region.encode()]
+        if self.kind != "person":                       # person commitments stay as in v0.6
+            parts.append(self.kind.encode())
+        for part in parts:
             h.update(len(part).to_bytes(2, "big") + part)
         return h.digest()
 
     def to_bytes(self, ticket_id: str) -> bytes:
         return json.dumps({"t": ticket_id, "s": self.secret.hex(), "d": self.domain,
-                           "b": self.phone_block, "q": self.rare_permille, "g": self.region}, sort_keys=True).encode()
+                           "b": self.phone_block, "q": self.rare_permille, "g": self.region,
+                           "c": self.kind}, sort_keys=True).encode()
 
     @staticmethod
     def parse(blob: bytes, ticket_id: str) -> "Opening | None":
@@ -81,15 +86,20 @@ class Opening:
             o = json.loads(blob)
             if o["t"] != ticket_id:
                 return None
-            op = Opening(bytes.fromhex(o["s"]), str(o["d"]), str(o["b"]), int(o["q"]), str(o["g"]))
+            op = Opening(bytes.fromhex(o["s"]), str(o["d"]), str(o["b"]), int(o["q"]), str(o["g"]),
+                         str(o.get("c", "person")))
         except (ValueError, KeyError, TypeError):
             return None
         ok = (len(op.secret) == 32 and valid_block(op.phone_block) and 0 <= op.rare_permille <= 1000
-              and (op.region == tables.NATIONWIDE or op.region in tables.REGIONS))
+              and (op.region == tables.NATIONWIDE or op.region in tables.REGIONS) and op.kind in KINDS)
         return op if ok else None
 
 
-def new_opening(domain: str, phone_block: str, rare_ratio: float = 0.2, region: str = tables.NATIONWIDE) -> Opening:
+KINDS = ("person", "secret", "sentence")
+
+
+def new_opening(domain: str, phone_block: str, rare_ratio: float = 0.2, region: str = tables.NATIONWIDE,
+                kind: str = "person") -> Opening:
     """region: where the canaries' addresses come from, to blend in with the
     protected data (e.g. "関東" for a Tokyo shop). Eight regions only, never
     a single prefecture (see tables.coincidence_bound).
@@ -101,7 +111,9 @@ def new_opening(domain: str, phone_block: str, rare_ratio: float = 0.2, region: 
         raise ValueError("phone_block must be 3-11 digits starting with 0")
     if region != tables.NATIONWIDE and region not in tables.REGIONS:
         raise ValueError(f"region must be one of {list(tables.REGIONS)} or '' for the whole country")
-    return Opening(secrets.token_bytes(32), domain.strip().lower(), phone_block, round(rare_ratio * 1000), region)
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}")
+    return Opening(secrets.token_bytes(32), domain.strip().lower(), phone_block, round(rare_ratio * 1000), region, kind)
 
 
 @dataclass(frozen=True)
@@ -153,6 +165,16 @@ def canary_from_ticket(ticket: Ticket, op: Opening) -> Canary:
     if ticket.table != tables.version():
         raise ValueError(f"ticket was issued with table {ticket.table!r}, this is {tables.version()!r}")
     g = Drbg(hashlib.sha256(b"shinafure-canary-v2|" + ticket.table.encode() + b"|" + ticket.nonce + op.secret).digest())
+    if op.kind == "secret":
+        words = [g.choice(tables.SECRET_WORDS)] + ([env] if (env := g.choice(tables.SECRET_ENVS)) else [])
+        body = "".join(g.choice(tables.BASE62) for _ in range(g.randint(32, 40)))
+        return Canary(ticket.ticket_id, ticket.dataset, {"style": "secret", "secret": "_".join(words) + "_" + body})
+    if op.kind == "sentence":
+        code = "".join(g.choice(tables.SENT_KANA) for _ in range(4)) + g.choice(tables.SENT_SUFFIX)
+        partner = "".join(g.choice(tables.SENT_KANA) for _ in range(3)) + g.choice(tables.SENT_PARTNERS)
+        text = (f"{g.choice(tables.SENT_DEPTS)}の{code}は、{g.randint(1, 12)}月{g.randint(1, 28)}日に"
+                f"{partner}と{g.randint(12, 9800)}万円で{g.choice(tables.SENT_VERBS)}予定。")
+        return Canary(ticket.ticket_id, ticket.dataset, {"style": "sentence", "sentence": text})
     rare = g.below(1000) < op.rare_permille
     if rare:
         s, gv = g.choice(SURNAMES), g.choice(GIVEN)

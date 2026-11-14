@@ -23,7 +23,7 @@ import re
 import unicodedata
 from typing import Iterator
 
-STRONG = {"e", "p"}
+STRONG = {"e", "p", "k", "s"}      # email, phone, secret (API key), sentence
 WEAK = {"n", "r", "m", "a", "t"}
 NAME_KINDS = {"n", "r", "m"}
 PARTNER_KINDS = {"a", "t"}
@@ -42,6 +42,20 @@ _PREFS = ("北海道|東京都|大阪府|京都府|" + "|".join(p + "県" for p 
 _ADDRESS = re.compile(f"(?:{_PREFS})[^\\s,、|\"'<>{{}}\\[\\]]{{2,30}}?\\d+(?:-\\d+){{1,2}}")
 
 NAME_MIN, NAME_MAX = 3, 10
+
+# secrets: one or more short words joined by - or _, then a long random part
+_SECRET = re.compile(r"(?<![A-Za-z0-9_\-])(?:[A-Za-z][A-Za-z0-9]{1,15}[-_]){1,3}[A-Za-z0-9]{24,64}(?![A-Za-z0-9_\-])")
+_SENT_END = re.compile(r"[。．！？!?\n:：]+")          # colons too: "議事録：<sentence>"
+_LIST_MARK = re.compile(r"^(?:[\-*#>•]+|\d{1,3}[.)）])+")
+_SENT_NOISE = re.compile(r"[\s　、，,「」『』（）()・\"'“”‘’:：;；]+")
+SENT_MIN, SENT_MAX = 12, 200
+
+
+def norm_sentence(s: str) -> str:
+    """A sentence without spaces and inner punctuation, so that reflowing,
+    commas or quotes do not change it."""
+    s = _SENT_NOISE.sub("", nfkc(s)).strip("。．.!！?？")
+    return _LIST_MARK.sub("", s)                     # "- ", "1.", "*", "#" at the start of a line
 
 
 def nfkc(s: str) -> str:
@@ -87,6 +101,10 @@ def romaji_key(a: str, b: str) -> str:
 def person_tokens(p: dict) -> set[str]:
     """Tokens for one canary person. Expects keys: last, first (kanji),
     last_kana, first_kana (katakana), last_roma, first_roma, email, phone, address."""
+    if p.get("style") == "secret":
+        return {"k:" + p["secret"]}
+    if p.get("style") == "sentence":
+        return {"s:" + norm_sentence(p["sentence"])}
     toks = {"e:" + p["email"].lower()}
     ph = norm_phone(p["phone"])
     if ph:
@@ -110,6 +128,11 @@ def split_candidates(text: str) -> tuple[list[str], str]:
     t = nfkc(text)
     low = t.lower()
     out = ["e:" + m.group(0) for m in _EMAIL.finditer(low)]
+    out += ["k:" + m.group(0) for m in _SECRET.finditer(t)]
+    for sent in _SENT_END.split(t):
+        ns = norm_sentence(sent)
+        if SENT_MIN <= len(ns) <= SENT_MAX:
+            out.append("s:" + ns)
     for m in _PHONE.finditer(t):
         ph = norm_phone(m.group(0))
         if ph:
