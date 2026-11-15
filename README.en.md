@@ -302,7 +302,7 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
 - Code: this repository (Shinafure v1.4, 77 tests).
-- Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
+- Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`). v1.4 saved on November 16, 2026 ([`swh:1:snp:cd8721692f9b4f1eb47d4207ef49f5a4b7bb3223`](https://archive.softwareheritage.org/swh:1:snp:cd8721692f9b4f1eb47d4207ef49f5a4b7bb3223), commit b9608da).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
 - Finding experiment: run with `--tasks family --canary-style ordinary` (or `rare`) with `--seed 11`, `--seed 12` and `--rows 40`, then aggregate with `python -m demo.pool --rows 40 "*.jsonl"`. For granite, add `--model granite3.3:8b`; it took about 18 hours on a laptop with a weak GPU.
