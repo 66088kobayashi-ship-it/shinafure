@@ -29,7 +29,7 @@ def texts():
 
 
 def reference(text):
-    return [t[2:] for t in candidates(text) if t.startswith("n:")]
+    return [t[2:] for t in name_windows(split_candidates(text)[1])]
 
 
 @pytest.mark.skipif(not HAVE_NUMPY, reason="numpy not installed")

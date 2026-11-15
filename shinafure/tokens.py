@@ -13,6 +13,10 @@ Token types
   a:  address, normalized                         weak (needs a partner)
   t:  last 8 digits of a phone-like number        weak (survives a dropped or mangled prefix)
 
+Names split into two fields (v1.4): the text side also joins a surname field
+and the next field (CSV, JSON, "姓：… 名：…" forms) into n: candidates, and
+pairs capitalized latin words a few words apart into r: candidates.
+
 Registry kinds (what a matched token counts as) add one more:
   m:  an *ordinary-looking* canary's name. Ordinary names collide with real
       people, so they only ever count together with a partner (a or t).
@@ -36,6 +40,20 @@ _CJK = "぀-ヿ㐀-鿿々ー"
 _CJK_RUN = re.compile(f"[{_CJK}]+")
 _SPACE_IN_CJK = re.compile(f"(?<=[{_CJK}])[\\s　]+(?=[{_CJK}])")
 _LATIN_WORD = re.compile(r"[a-z]{2,20}")
+# v1.4: a field followed by a record separator (CSV, TSV, JSON, "姓：…／名：…"
+# forms), never by Japanese punctuation (、。「」), and then another field.
+# Whitespace alone is not enough: fields split only by spaces or line breaks
+# are already joined for the name windows (_SPACE_IN_CJK).
+_GAP = r"(?=[\s\w\-]{0,39}+[,|;:/\"'=\[\]{}()<>])[\s,|;:/\"'=\[\]{}()<>A-Za-z0-9_\-]{1,40}+"
+_FIELD = re.compile(f"(?<![{_CJK}])([{_CJK}]{{1,9}}+)(?![{_CJK}]){_GAP}(?=([{_CJK}]++))")
+_LABEL_MAX = 4                        # 名, 名前, 下の名前: a label between the two fields
+_HONORIFICS = ("様", "さま", "さん", "殿", "氏")
+# romanized parts split by a key or two, as JSON ("last":"Takanashi","first":"Hakuto")
+# or YAML (last: Takanashi\nfirst: Hakuto). Each pattern starts with a literal, so it is fast.
+_KEYGAP = r"[\s\"',:;=|{}\[\]_\-]+"
+_KEYGAP0 = _KEYGAP[:-1] + "*"
+_CAP_SPLITS = tuple(re.compile(f"{q}([A-Z][a-z]{{1,19}})(?![A-Za-z])(?:{_KEYGAP}[a-z]{{2,20}}){{1,3}}{_KEYGAP0}{q}(?=([A-Z][a-z]{{1,19}})(?![A-Za-z]))")
+                    for q in ('"', ": "))
 _PREFS = ("北海道|東京都|大阪府|京都府|" + "|".join(p + "県" for p in (
     "青森 岩手 宮城 秋田 山形 福島 茨城 栃木 群馬 埼玉 千葉 神奈川 新潟 富山 石川 福井 山梨 長野 岐阜 静岡 愛知 "
     "三重 滋賀 兵庫 奈良 和歌山 鳥取 島根 岡山 広島 山口 徳島 香川 愛媛 高知 福岡 佐賀 長崎 熊本 大分 宮崎 鹿児島 沖縄").split()))
@@ -146,10 +164,37 @@ def split_candidates(text: str) -> tuple[list[str], str]:
     t_addr = re.sub(r"(\d+)号", r"\1", t_addr)
     t_addr = re.sub(r"-+", "-", t_addr)
     out += ["a:" + norm_address(m.group(0)) for m in _ADDRESS.finditer(t_addr)]
-    # romanized names: every adjacent pair of latin words, order-insensitive
+    # romanized names: every adjacent pair of latin words, order-insensitive,
+    # and capitalized words a few words apart ("last":"Takanashi","first":"Hakuto")
     words = _LATIN_WORD.findall(low)
-    out += ["r:" + a + "|" + b if a <= b else "r:" + b + "|" + a for a, b in zip(words, words[1:])]  # = romaji_key
+    pairs = list(zip(words, words[1:]))
+    for rx in _CAP_SPLITS:
+        pairs += [(m.group(1).lower(), m.group(2).lower()) for m in rx.finditer(t)]
+    out += ["r:" + a + "|" + b if a <= b else "r:" + b + "|" + a for a, b in pairs]  # = romaji_key
+    out += ["n:" + x for x in field_pairs(t)]
     return out, _SPACE_IN_CJK.sub("", t)
+
+
+def field_pairs(t: str) -> list[str]:
+    """Names split into two fields: the surname field followed by the given
+    name field, either directly or across one short label. Each field is a
+    whole kana/kanji run of the NFKC text (spaces not removed); the gap must
+    look like a record separator."""
+    ms = [(m.start(), m.group(1), m.start(2), m.group(2)) for m in _FIELD.finditer(t)]
+    out = []
+    lo, hi = NAME_MIN, NAME_MAX
+    for k in range(len(ms)):
+        _, a, b_at, b = ms[k]
+        la = len(a)
+        bs = (b, ms[k + 1][3]) if len(b) <= _LABEL_MAX and k + 1 < len(ms) and ms[k + 1][0] == b_at else (b,)
+        for b in bs:                                       # a+b, and a+(label)+b
+            if lo <= la + len(b) <= hi:
+                out.append(a + b)
+            if b[-1] in "様まん殿氏" and b.endswith(_HONORIFICS):
+                bb = b[:-2] if b.endswith(("さま", "さん")) else b[:-1]
+                if bb and lo <= la + len(bb) <= hi:
+                    out.append(a + bb)
+    return out
 
 
 def name_windows(joined: str) -> Iterator[str]:

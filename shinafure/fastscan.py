@@ -64,7 +64,10 @@ def other_hits(tokens, filt) -> set[str]:
     """Non-name tokens whose prefix is in the filter (same value as prefix())."""
     sha, pfx, fb, shift = hashlib.sha256, b"shinafure-v1|P|", int.from_bytes, 64 - PREFIX_BITS
     uniq = list(set(tokens))
-    pfs = [fb(sha(pfx + t.encode()).digest()[:8], "big") >> shift for t in uniq]
+    names = [t[2:] for t in uniq if t[:2] == "n:"]                 # split name fields (v1.4)
+    uniq = [t for t in uniq if t[:2] != "n:"] + ["n:" + s for s in names]
+    pfs = [fb(sha(pfx + t.encode()).digest()[:8], "big") >> shift for t in uniq[:len(uniq) - len(names)]]
+    pfs += name_prefix_many(names)
     if isinstance(filt, PrefixFilter):
         return {t for t, ok in zip(uniq, filt.contains_many(pfs)) if ok}
     return {t for t, p in zip(uniq, pfs) if p in filt}
@@ -139,6 +142,22 @@ if HAVE_NUMPY:
                 for i in idx[filt_sorted[pos] == pf].tolist() if filt_sorted.size else ():
                     hits.append(joined[i:i + L])
         return count, hits
+
+
+def name_prefix_many(names: list[str]) -> list[int]:
+    """name_prefix for many short strings at once (same values)."""
+    if not HAVE_NUMPY or len(names) < 32 or any(len(s) > NAME_MAX for s in names):
+        return [name_prefix(s) for s in names]
+    L = np.fromiter(map(len, names), dtype=np.int64, count=len(names))
+    buf = "".join(s.ljust(NAME_MAX, "\0") for s in names).encode("utf-32-le")
+    c = np.frombuffer(buf, dtype=np.uint32).reshape(-1, NAME_MAX).astype(np.uint64)
+    h = np.zeros(len(names), dtype=np.uint64)
+    base = _U(_BASE)
+    with np.errstate(over="ignore"):
+        for j in range(NAME_MAX):
+            h = np.where(j < L, h * base + c[:, j], h)
+        h = h + np.array(_SEED_L, dtype=np.uint64)[L]
+        return (_mix_np(h) >> _U(64 - PREFIX_BITS)).tolist()
 
 
 def _sorted_u64(values):

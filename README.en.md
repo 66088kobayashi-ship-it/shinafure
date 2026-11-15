@@ -184,6 +184,23 @@ With 1,500 canaries registered (500 each of people, API keys and sentences), che
 
 Sentence canaries have a weakness: they are missed if reworded or broken across lines.
 
+## Lists with the surname and given name in separate fields
+
+Since v1.4 a canary's name is found even when the surname and given name are in separate fields. Customer lists often keep them in separate columns.
+
+| Layout | Example | v1.3 | v1.4 |
+| --- | --- | --- | --- |
+| CSV | `小鳥遊,珀斗,神奈川県…` | suspect | confirmed |
+| JSON | `{"last_name":"小鳥遊","first_name":"珀斗",…}` | suspect | confirmed |
+| Form | `姓：小鳥遊` newline `名：珀斗` | suspect | confirmed |
+| With an honorific | `お名前 小鳥遊 / 珀斗 様` | suspect | confirmed |
+| Romanized, JSON or YAML | `"last":"Takanashi","first":"Hakuto"` | suspect | confirmed |
+| Tab-separated, one field per line | `小鳥遊` newline `珀斗` | confirmed | confirmed |
+
+(Each record had its email and phone removed, keeping only name and address. Checked with both a rare and an ordinary name.)
+
+Two fields are joined only when what lies between them looks like a record separator (`,` `|` `:` `"` `/` or a latin key), never Japanese sentence punctuation (、。). Over about 3.5 million characters of documents and lists, the numbers of confirmed and suspect results were exactly the same as in v1.3. The added work is 4-6% of matching time.
+
 ## Matching speed
 
 In v0.5, matching is about 14 times faster than in v0.4 (about 30 times for Japanese). Detection results are exactly the same as in v0.4.
@@ -258,7 +275,7 @@ In a stream, a canary split across several chunks is still found. With policy "b
 Shinafure works only when data reaches a participating AI with personal values intact.
 
 - **It does nothing against AI that does not participate.** It is powerless against attackers who run open models on their own machines or never put the data into an AI. On its own it is not decisive.
-- **If personal values disappear, it cannot detect.** For example, when the data is summarized, rows are deleted, or surnames and given names end up on separate rows.
+- **If personal values disappear, it cannot detect.** For example, when the data is summarized or rows are deleted. Surnames and given names in separate fields are found since v1.4, except when only spaces separate them and a label sits in between ("姓 小鳥遊 名 珀斗").
 - **Canaries that are spotted get removed.** If canary emails all share one domain, an attacker who notices will delete those rows. You need several ordinary-looking domains and phone numbers you own. The same applies if the prefix filter leaks; it is meant to be given only to participating providers.
 - **Abuse prevention still has a gap.** A canary from a legitimate ticket can, by chance, have the same name and address as a real person. Since v0.6 draws addresses from real town-chome units, drawing 100 tickets a day for a year gives at most about a 0.008% chance of hitting one specific person (about 0.0002% if addresses come from the whole country). The remaining bottleneck is the table of rare names (400 combinations). Number block verification is also a single SMS. And providers checking inputs at all needs to be squared with privacy law and, in Japan, the secrecy of communications.
 - **What was measured is narrow.** Only two real LLMs (qwen2.5:7b and granite3.3:8b) were tested. Matching runs at about 1.7 million Japanese and 2.7 million English characters per second in one Python thread; with a million canaries, Japanese still runs at about 1.25 million characters per second (v1.1).
@@ -284,7 +301,7 @@ For Japanese patents, I ran about 14 Boolean searches on [J-PlatPat](https://www
 
 The prototype is written in Python, and every experiment can be reproduced on an ordinary PC. No paid APIs were used.
 
-- Code: this repository (Shinafure v1.3, 72 tests).
+- Code: this repository (Shinafure v1.4, 77 tests).
 - Archive record: saved to [Software Heritage](https://archive.softwareheritage.org/swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5) on November 9, 2026 (`swh:1:snp:674e293b03bd712c0c39f90451924e4484c97aa5`).
 - Synthetic data and corpus experiments: `python -m demo.measure corpus` (about 1 minute)
 - Real-LLM experiment: run qwen2.5:7b with [Ollama](https://ollama.com), then `python -m demo.llm_eval --backend ollama --chunks 4 --rows 20`. It took about 2 hours on a laptop without a GPU.
